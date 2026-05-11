@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0e2238" />
+  <title>RideMint Ledger Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div>
+        <h1>RideMint Ledger Pro</h1>
+        <p>Professional rideshare finance app for logbook, GST, BAS, and tax summaries.</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-05-11e</p>
+      </div>
+      <div class="hero-actions" id="topActions">
+        <button id="printReportBtn" class="btn secondary hidden">Print Current Report</button>
+        <button id="logoutBtn" class="btn danger hidden">Logout</button>
+      </div>
+    </header>
+
+    <section class="card" id="configCard">
+      <h2>Connection Setup</h2>
+      <div class="grid2">
+        <div><label>Supabase URL</label><input id="sbUrl" placeholder="https://xxxx.supabase.co" /></div>
+        <div><label>Supabase Anon Key</label><input id="sbAnon" placeholder="Paste anon public key" /></div>
+      </div>
+      <div class="row">
+        <button id="saveConfigBtn" class="btn">Save Connection</button>
+        <span class="status" id="configStatus">Loading app...</span>
+      </div>
+    </section>
+
+    <section id="authPages" class="auth-pages">
+      <article class="card auth-card" id="loginPage">
+        <h2>Login</h2>
+        <div class="form-grid single">
+          <div><label>Email</label><input id="loginEmail" type="email" placeholder="driver@email.com" /></div>
+          <div><label>Password</label><input id="loginPassword" type="password" placeholder="Your password" /></div>
+          <button id="loginBtn" class="btn full" type="button">Login</button>
+        </div>
+        <p class="small-note">No account? <button id="goSignUpBtn" class="link-btn" type="button">Create account</button></p>
+      </article>
+
+      <article class="card auth-card hidden" id="signupPage">
+        <h2>Create Account</h2>
+        <div class="form-grid single">
+          <div><label>Full Name</label><input id="signupFullName" type="text" placeholder="Driver full name" /></div>
+          <div><label>Email</label><input id="signupEmail" type="email" placeholder="driver@email.com" /></div>
+          <div><label>Password</label><input id="signupPassword" type="password" placeholder="Minimum 6 characters" /></div>
+          <div><label>Confirm Password</label><input id="signupPassword2" type="password" placeholder="Re-enter password" /></div>
+          <button id="signupBtn" class="btn full" type="button">Create Account</button>
+        </div>
+        <p class="small-note">Already have an account? <button id="goLoginBtn" class="link-btn" type="button">Go to login</button></p>
+      </article>
+      <div class="status" id="authStatus"></div>
+    </section>
+
+    <section id="appRoot" class="hidden">
+      <nav class="tabbar" id="tabbar">
+        <button class="tab active" data-tab="dashboard">Dashboard</button>
+        <button class="tab" data-tab="logbook">Logbook</button>
+        <button class="tab" data-tab="income">Income</button>
+        <button class="tab" data-tab="expenses">Expenses</button>
+        <button class="tab" data-tab="tolls">Tolls</button>
+        <button class="tab" data-tab="tax">Tax</button>
+        <button class="tab" data-tab="reports">Reports</button>
+        <button class="tab" data-tab="settings">Settings</button>
+      </nav>
+
+      <section class="tab-panel" id="tab-dashboard">
+        <section class="kpi-grid" id="kpiGrid"></section>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-logbook">
+        <article class="card">
+          <h2>ATO Logbook Entry</h2>
+          <form id="tripForm" class="form-grid">
+            <div><label>Date</label><input type="date" name="date" required /></div>
+            <div><label>Purpose</label><select name="purpose"><option>Business</option><option>Private</option></select></div>
+            <div><label>Start Odometer (km)</label><input type="number" name="odo_start" step="0.1" min="0" required /></div>
+            <div><label>End Odometer (km)</label><input type="number" name="odo_end" step="0.1" min="0" required /></div>
+            <div class="full"><label>From</label><input name="from_location" placeholder="Suburb or start point" /></div>
+            <div class="full"><label>To</label><input name="to_location" placeholder="Destination" /></div>
+            <div class="full"><label>Notes</label><input name="notes" placeholder="Trip purpose notes" /></div>
+            <button class="btn full" type="submit">Add Logbook Entry</button>
+          </form>
+          <table id="tripTable"></table>
+          <div class="row"><button id="exportLogbookCsvBtn" class="btn secondary" type="button">Export Logbook CSV</button></div>
+        </article>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-income">
+        <article class="card">
+          <h2>Fare Income</h2>
+          <form id="fareForm" class="form-grid single">
+            <div><label>Date</label><input type="date" name="date" required /></div>
+            <div><label>Platform</label><select name="platform" id="platformSelect"></select></div>
+            <div><label>Gross Fare (AUD)</label><input type="number" name="gross" step="0.01" min="0" required /></div>
+            <div><label>GST Included</label><select name="gst_included"><option value="true">Yes</option><option value="false">No</option></select></div>
+            <div><label>Platform Fee (AUD)</label><input type="number" name="platform_fee" step="0.01" min="0" value="0" /></div>
+            <div><label>Platform Fee GST (AUD, auto)</label><input type="number" name="platform_fee_gst" id="platformFeeGst" step="0.01" min="0" value="0" readonly /></div>
+            <button class="btn full" type="submit">Add Fare</button>
+          </form>
+          <table id="fareTable"></table>
+        </article>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-expenses">
+        <article class="card">
+          <h2>Expenses & GST Credits</h2>
+          <form id="expenseForm" class="form-grid single">
+            <div><label>Date</label><input type="date" name="date" required /></div>
+            <div><label>Category</label><select name="category"><option>Fuel</option><option>Maintenance</option><option>Insurance</option><option>Registration</option><option>Phone/Data</option><option>Car Wash</option><option>Parking</option><option>Other</option></select></div>
+            <div><label>Amount (AUD)</label><input type="number" name="amount" step="0.01" min="0" required /></div>
+            <div><label>GST Claimable</label><select name="gst_claimable"><option value="true">Yes</option><option value="false">No</option></select></div>
+            <div class="full"><label>Notes</label><input name="notes" /></div>
+            <button class="btn full" type="submit">Add Expense</button>
+          </form>
+          <table id="expenseTable"></table>
+        </article>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-tolls">
+        <article class="card">
+          <h2>Tolls</h2>
+          <form id="tollForm" class="form-grid single">
+            <div><label>Date</label><input type="date" name="date" required /></div>
+            <div><label>Amount (AUD)</label><input type="number" name="amount" step="0.01" min="0" required /></div>
+            <div><label>Reimbursed by Rider</label><select name="reimbursed"><option value="false">No</option><option value="true">Yes</option></select></div>
+            <button class="btn full" type="submit">Add Toll</button>
+          </form>
+          <table id="tollTable"></table>
+        </article>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-tax">
+        <article class="card">
+          <h2>Tax Settings</h2>
+          <form id="taxForm" class="form-grid single">
+            <div><label>Other Income (AUD)</label><input type="number" name="other_income" min="0" step="0.01" value="0" /></div>
+            <div><label>Super Contribution (AUD)</label><input type="number" name="super_contribution" min="0" step="0.01" value="0" /></div>
+            <div><label>Auto Tax % (Calculated)</label><input type="text" id="autoTaxPct" value="0.0%" readonly /></div>
+            <button type="submit" class="btn full">Save Tax Settings</button>
+          </form>
+          <div class="status" id="taxStatus"></div>
+        </article>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-reports">
+        <article class="card">
+          <h2>Summaries & Reports</h2>
+          <div class="grid2">
+            <div><label>Summary Period</label><select id="summaryPeriod"><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select></div>
+            <div><label>Year</label><input id="summaryYear" type="number" min="2020" max="2100" /></div>
+          </div>
+          <div class="row">
+            <button id="refreshSummaryBtn" class="btn" type="button">Generate Summary</button>
+            <button id="printBasBtn" class="btn secondary" type="button">Print BAS Summary</button>
+            <button id="printTaxBtn" class="btn secondary" type="button">Print Tax Summary</button>
+          </div>
+          <div id="reportArea" class="report"></div>
+        </article>
+      </section>
+
+      <section class="tab-panel hidden" id="tab-settings">
+        <article class="card">
+          <h2>Admin Settings</h2>
+          <div id="settingsGuard" class="small-note">Only admin users can access settings.</div>
+          <div id="adminSettingsBody" class="hidden">
+            <h3 style="margin:10px 0 8px;">Connection Setup</h3>
+            <div class="grid2">
+              <div><label>Supabase URL</label><input id="sbUrlAdmin" placeholder="https://xxxx.supabase.co" /></div>
+              <div><label>Supabase Anon Key</label><input id="sbAnonAdmin" placeholder="Paste anon public key" /></div>
+            </div>
+            <div class="row">
+              <button id="saveConfigBtnAdmin" class="btn" type="button">Save Connection</button>
+            </div>
+            <h3 style="margin:14px 0 8px;">Admin User Management</h3>
+            <div class="grid2">
+              <div><label>User Email</label><input id="adminEmailInput" type="email" placeholder="user@email.com" /></div>
+              <div><label>Role</label><select id="adminRoleInput"><option value="driver">Driver</option><option value="admin">Admin</option></select></div>
+            </div>
+            <div class="row">
+              <button id="saveAdminRoleBtn" class="btn" type="button">Update Role</button>
+              <button id="refreshAdminsBtn" class="btn secondary" type="button">Refresh Users</button>
+            </div>
+            <table id="adminUsersTable"></table>
+            <h3 style="margin:14px 0 8px;">Income Platform Options</h3>
+            <div class="grid2">
+              <div><label>Platform Name</label><input id="platformNameInput" type="text" placeholder="e.g. Ola" /></div>
+              <div><label>Default?</label><select id="platformDefaultInput"><option value="false">No</option><option value="true">Yes</option></select></div>
+            </div>
+            <div class="row">
+              <button id="addPlatformBtn" class="btn" type="button">Add Platform</button>
+              <button id="refreshPlatformsBtn" class="btn secondary" type="button">Refresh Platforms</button>
+            </div>
+            <table id="platformsTable"></table>
+            <div class="status" id="settingsStatus"></div>
+          </div>
+        </article>
+      </section>
+    </section>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

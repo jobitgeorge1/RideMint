@@ -1,0 +1,186 @@
+-- Run this in Supabase SQL Editor
+
+create extension if not exists pgcrypto;
+
+create table if not exists trips (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  date date not null,
+  purpose text not null check (purpose in ('Business', 'Private')),
+  odo_start numeric(10,2) not null,
+  odo_end numeric(10,2) not null,
+  km numeric(10,2) not null,
+  from_location text,
+  to_location text,
+  notes text,
+  created_at timestamptz default now()
+);
+
+create table if not exists fares (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  date date not null,
+  platform text not null,
+  gross numeric(12,2) not null,
+  gst_included boolean not null default true,
+  platform_fee numeric(12,2) not null default 0,
+  platform_fee_gst numeric(12,2) not null default 0,
+  created_at timestamptz default now()
+);
+
+alter table fares add column if not exists platform_fee numeric(12,2) not null default 0;
+alter table fares add column if not exists platform_fee_gst numeric(12,2) not null default 0;
+
+create table if not exists expenses (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  date date not null,
+  category text not null,
+  amount numeric(12,2) not null,
+  gst_claimable boolean not null default true,
+  notes text,
+  created_at timestamptz default now()
+);
+
+create table if not exists tolls (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  date date not null,
+  amount numeric(12,2) not null,
+  reimbursed boolean not null default false,
+  created_at timestamptz default now()
+);
+
+create table if not exists tax_settings (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references auth.users(id) on delete cascade,
+  other_income numeric(12,2) not null default 0,
+  super_contribution numeric(12,2) not null default 0,
+  tax_reserve_pct numeric(5,2) not null default 22,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create table if not exists profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text not null default '',
+  full_name text not null default '',
+  role text not null default 'driver' check (role in ('admin', 'driver')),
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create table if not exists platform_options (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  is_default boolean not null default false,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz default now()
+);
+
+alter table profiles add column if not exists role text not null default 'driver';
+alter table profiles drop constraint if exists profiles_role_check;
+alter table profiles add constraint profiles_role_check check (role in ('admin', 'driver'));
+update profiles
+set role = 'admin', updated_at = now()
+where lower(email) = 'jobitpgeorge@gmail.com';
+
+alter table trips enable row level security;
+alter table fares enable row level security;
+alter table expenses enable row level security;
+alter table tolls enable row level security;
+alter table tax_settings enable row level security;
+alter table profiles enable row level security;
+alter table platform_options enable row level security;
+
+create or replace function public.is_current_user_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.profiles p
+    where p.id = auth.uid() and p.role = 'admin'
+  );
+$$;
+
+drop policy if exists "trips owner read" on trips;
+drop policy if exists "trips owner write" on trips;
+create policy "trips owner read" on trips for select using (auth.uid() = user_id);
+create policy "trips owner write" on trips for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "fares owner read" on fares;
+drop policy if exists "fares owner write" on fares;
+create policy "fares owner read" on fares for select using (auth.uid() = user_id);
+create policy "fares owner write" on fares for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "expenses owner read" on expenses;
+drop policy if exists "expenses owner write" on expenses;
+create policy "expenses owner read" on expenses for select using (auth.uid() = user_id);
+create policy "expenses owner write" on expenses for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "tolls owner read" on tolls;
+drop policy if exists "tolls owner write" on tolls;
+create policy "tolls owner read" on tolls for select using (auth.uid() = user_id);
+create policy "tolls owner write" on tolls for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "tax owner read" on tax_settings;
+drop policy if exists "tax owner write" on tax_settings;
+create policy "tax owner read" on tax_settings for select using (auth.uid() = user_id);
+create policy "tax owner write" on tax_settings for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "profiles owner read" on profiles;
+drop policy if exists "profiles owner upsert own" on profiles;
+drop policy if exists "profiles owner update own" on profiles;
+drop policy if exists "profiles admin read all" on profiles;
+drop policy if exists "profiles admin update all" on profiles;
+create policy "profiles owner read" on profiles for select using (auth.uid() = id);
+create policy "profiles owner upsert own" on profiles for insert with check (auth.uid() = id);
+create policy "profiles owner update own" on profiles for update using (auth.uid() = id) with check (auth.uid() = id);
+create policy "profiles admin read all" on profiles for select using (public.is_current_user_admin());
+create policy "profiles admin update all" on profiles for update using (public.is_current_user_admin()) with check (public.is_current_user_admin());
+
+drop policy if exists "platform read all auth users" on platform_options;
+drop policy if exists "platform admin write" on platform_options;
+create policy "platform read all auth users" on platform_options for select using (auth.uid() is not null);
+create policy "platform admin write" on platform_options for all using (public.is_current_user_admin()) with check (public.is_current_user_admin());
+
+insert into platform_options (name, is_default)
+values ('Uber', true)
+on conflict (name) do nothing;
+
+create index if not exists trips_user_date_idx on trips(user_id, date desc);
+create index if not exists fares_user_date_idx on fares(user_id, date desc);
+create index if not exists expenses_user_date_idx on expenses(user_id, date desc);
+create index if not exists tolls_user_date_idx on tolls(user_id, date desc);
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (id, email, full_name, role)
+  values (
+    new.id,
+    coalesce(new.email, ''),
+    coalesce(new.raw_user_meta_data->>'full_name', ''),
+    case when lower(coalesce(new.email, '')) = 'jobitpgeorge@gmail.com' then 'admin' else 'driver' end
+  )
+  on conflict (id) do update
+    set email = excluded.email,
+        full_name = excluded.full_name,
+        role = excluded.role,
+        updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
