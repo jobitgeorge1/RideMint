@@ -6,8 +6,8 @@ if (window.__RIDEMINT_APP_LOADED__) {
 window.__RIDEMINT_APP_LOADED__ = true;
 
 const APP_KEY = "ridemint-pro-config";
-const DEFAULT_SUPABASE_URL = "";
-const DEFAULT_SUPABASE_ANON = "";
+const DEFAULT_SUPABASE_URL = window.RIDEMINT_CONFIG?.SUPABASE_URL || "";
+const DEFAULT_SUPABASE_ANON = window.RIDEMINT_CONFIG?.SUPABASE_ANON_KEY || "";
 const today = new Date().toISOString().slice(0, 10);
 
 let supabase = null;
