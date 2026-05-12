@@ -16,6 +16,7 @@ let currentProfile = null;
 let isAdmin = false;
 let db = { trips: [], fares: [], expenses: [], tolls: [], tax: null, platforms: [] };
 let editing = { trips: null, fares: null, expenses: null, tolls: null };
+let activeTab = "dashboard";
 
 const el = (id) => document.getElementById(id);
 
@@ -74,6 +75,7 @@ function wireEvents() {
   bindClick("fareCancelEditBtn", () => clearEdit("fares"));
   bindClick("expenseCancelEditBtn", () => clearEdit("expenses"));
   bindClick("tollCancelEditBtn", () => clearEdit("tolls"));
+  bindClick("fabBtn", onFabClick);
   bindFareFeeAutoCalc();
 }
 
@@ -253,7 +255,9 @@ function toggleApp() {
   el("logoutBtn").classList.toggle("hidden", !currentUser);
   el("printReportBtn").classList.toggle("hidden", !currentUser);
   el("authPages").classList.toggle("hidden", !!currentUser);
+  el("fabBtn").classList.toggle("hidden", !currentUser);
   applyAdminVisibility();
+  updateFab();
 }
 
 function showAuthPage(type) {
@@ -268,7 +272,9 @@ function setupTabs() {
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     const panel = el(`tab-${key}`);
     if (panel) panel.classList.remove("hidden");
+    activeTab = key;
     updateSectionHeader(key);
+    updateFab();
   };
   document.querySelectorAll(".tab, .nav-item-lite").forEach((t) => {
     t.addEventListener("click", () => activate(t.dataset.tab));
@@ -841,11 +847,12 @@ function bindRowActions() {
   document.querySelectorAll(".edit").forEach((b) => {
     b.onclick = () => startEdit(b.dataset.table, b.dataset.id);
   });
+  bindSwipeRows();
 }
 
 function tableHtml(headers, rows) {
   const h = `<tr>${headers.map((x) => `<th>${x}</th>`).join("")}</tr>`;
-  const b = rows.length ? rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${headers.length}">No records.</td></tr>`;
+  const b = rows.length ? rows.map((r) => `<tr class="swipe-row">${r.map((c, i) => `<td class="${i === r.length - 1 ? "action-cell" : ""}">${c}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${headers.length}">No records.</td></tr>`;
   return h + b;
 }
 function delBtn(table, id) { return `<button class="del" data-table="${table}" data-id="${id}">Delete</button>`; }
@@ -892,6 +899,58 @@ function setEditUI(submitId, cancelId, isEditing, submitLabel) {
   const s = el(submitId), c = el(cancelId);
   if (s) s.textContent = submitLabel;
   if (c) c.classList.toggle("hidden", !isEditing);
+}
+
+function onFabClick() {
+  const map = {
+    logbook: "tripForm",
+    income: "fareForm",
+    expenses: "expenseForm",
+    tolls: "tollForm",
+    tax: "taxForm"
+  };
+  if (activeTab === "reports") return renderReport();
+  if (activeTab === "dashboard") {
+    document.querySelector('.tab[data-tab="income"]')?.click();
+    return;
+  }
+  const id = map[activeTab];
+  const form = id ? el(id) : null;
+  if (!form) return;
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+  const first = form.querySelector("input,select,textarea");
+  if (first) setTimeout(() => first.focus(), 220);
+}
+
+function updateFab() {
+  const fab = el("fabBtn");
+  if (!fab) return;
+  const labels = {
+    dashboard: "+ Add Entry",
+    logbook: "+ Add Trip",
+    income: "+ Add Fare",
+    expenses: "+ Add Expense",
+    tolls: "+ Add Toll",
+    tax: "Save Tax",
+    reports: "Refresh",
+    settings: "Settings"
+  };
+  fab.textContent = labels[activeTab] || "+ Add";
+  fab.classList.toggle("hidden", !currentUser || activeTab === "settings");
+}
+
+function bindSwipeRows() {
+  const rows = document.querySelectorAll(".swipe-row");
+  rows.forEach((row) => {
+    let startX = 0;
+    row.ontouchstart = (e) => { startX = e.changedTouches[0].clientX; };
+    row.ontouchend = (e) => {
+      const endX = e.changedTouches[0].clientX;
+      const dx = endX - startX;
+      if (dx < -40) row.classList.add("reveal");
+      if (dx > 24) row.classList.remove("reveal");
+    };
+  });
 }
 function gstFromFare(x) { return x.gst_included ? n(x.gross) / 11 : n(x.gross) * 0.1; }
 function estimateTaxAu(income) {
