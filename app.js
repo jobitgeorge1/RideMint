@@ -61,6 +61,7 @@ function wireEvents() {
   bindClick("printBasBtn", () => renderReport("bas"));
   bindClick("printTaxBtn", () => renderReport("tax"));
   bindClick("printReportBtn", () => window.print());
+  bindClick("printReportBtn2", () => window.print());
   bindClick("exportLogbookCsvBtn", exportLogbookCsv);
   bindClick("saveAdminRoleBtn", updateUserRole);
   bindClick("refreshAdminsBtn", loadAdminUsers);
@@ -254,16 +255,34 @@ function showAuthPage(type) {
 }
 
 function setupTabs() {
-  document.querySelectorAll(".tab").forEach((t) => {
-    t.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
-      t.classList.add("active");
-      const key = t.dataset.tab;
-      document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
-      const panel = el(`tab-${key}`);
-      if (panel) panel.classList.remove("hidden");
-    });
+  const activate = (key) => {
+    document.querySelectorAll(".tab, .nav-item-lite").forEach((x) => x.classList.remove("active"));
+    document.querySelectorAll(`.tab[data-tab="${key}"], .nav-item-lite[data-tab="${key}"]`).forEach((x) => x.classList.add("active"));
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
+    const panel = el(`tab-${key}`);
+    if (panel) panel.classList.remove("hidden");
+    updateSectionHeader(key);
+  };
+  document.querySelectorAll(".tab, .nav-item-lite").forEach((t) => {
+    t.addEventListener("click", () => activate(t.dataset.tab));
   });
+  activate("dashboard");
+}
+
+function updateSectionHeader(key) {
+  const map = {
+    dashboard: ["Dashboard", "Business snapshot and performance metrics."],
+    logbook: ["Logbook", "ATO-compatible trip and odometer record."],
+    income: ["Income", "Fares, platform fees, and GST tracking."],
+    expenses: ["Expenses", "Costs and claimable GST credits."],
+    tolls: ["Tolls", "Track toll payments and reimbursements."],
+    tax: ["Tax", "Tax inputs and calculated effective tax rate."],
+    reports: ["Reports", "BAS, monthly, quarterly, and yearly summaries."],
+    settings: ["Settings", "Admin controls and platform configuration."]
+  };
+  const [title, sub] = map[key] || ["Dashboard", ""];
+  if (el("sectionTitle")) el("sectionTitle").textContent = title;
+  if (el("sectionSubtitle")) el("sectionSubtitle").textContent = sub;
 }
 
 async function refreshAll() {

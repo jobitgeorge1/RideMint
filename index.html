@@ -62,21 +62,49 @@
       <div class="status" id="authStatus"></div>
     </section>
 
-    <section id="appRoot" class="hidden">
-      <nav class="tabbar" id="tabbar">
-        <button class="tab active" data-tab="dashboard">Dashboard</button>
-        <button class="tab" data-tab="logbook">Logbook</button>
-        <button class="tab" data-tab="income">Income</button>
-        <button class="tab" data-tab="expenses">Expenses</button>
-        <button class="tab" data-tab="tolls">Tolls</button>
-        <button class="tab" data-tab="tax">Tax</button>
-        <button class="tab" data-tab="reports">Reports</button>
-        <button class="tab" data-tab="settings">Settings</button>
-      </nav>
+    <section id="appRoot" class="hidden app-shell">
+      <aside class="sidebar-lite">
+        <div class="sidebar-brand">
+          <strong>RideMint Pro</strong>
+          <span>Driver Console</span>
+        </div>
+        <nav class="sidebar-nav-lite">
+          <button class="nav-item-lite active" data-tab="dashboard">Dashboard</button>
+          <button class="nav-item-lite" data-tab="logbook">Logbook</button>
+          <button class="nav-item-lite" data-tab="income">Income</button>
+          <button class="nav-item-lite" data-tab="expenses">Expenses</button>
+          <button class="nav-item-lite" data-tab="tolls">Tolls</button>
+          <button class="nav-item-lite" data-tab="tax">Tax</button>
+          <button class="nav-item-lite" data-tab="reports">Reports</button>
+          <button class="nav-item-lite" data-tab="settings">Settings</button>
+        </nav>
+      </aside>
 
-      <section class="tab-panel" id="tab-dashboard">
-        <section class="kpi-grid" id="kpiGrid"></section>
-      </section>
+      <main class="main-pane">
+        <div class="topbar-lite">
+          <div>
+            <h2 id="sectionTitle">Dashboard</h2>
+            <p id="sectionSubtitle">Business snapshot and performance metrics.</p>
+          </div>
+          <div class="topbar-actions">
+            <button id="printReportBtn2" class="btn secondary">Print</button>
+          </div>
+        </div>
+
+        <nav class="tabbar" id="tabbar">
+          <button class="tab active" data-tab="dashboard">Dashboard</button>
+          <button class="tab" data-tab="logbook">Logbook</button>
+          <button class="tab" data-tab="income">Income</button>
+          <button class="tab" data-tab="expenses">Expenses</button>
+          <button class="tab" data-tab="tolls">Tolls</button>
+          <button class="tab" data-tab="tax">Tax</button>
+          <button class="tab" data-tab="reports">Reports</button>
+          <button class="tab" data-tab="settings">Settings</button>
+        </nav>
+
+        <section class="tab-panel" id="tab-dashboard">
+          <section class="kpi-grid" id="kpiGrid"></section>
+        </section>
 
       <section class="tab-panel hidden" id="tab-logbook">
         <article class="card">
@@ -169,7 +197,7 @@
         </article>
       </section>
 
-      <section class="tab-panel hidden" id="tab-settings">
+        <section class="tab-panel hidden" id="tab-settings">
         <article class="card">
           <h2>Admin Settings</h2>
           <div id="settingsGuard" class="small-note">Only admin users can access settings.</div>
@@ -205,7 +233,8 @@
             <div class="status" id="settingsStatus"></div>
           </div>
         </article>
-      </section>
+        </section>
+      </main>
     </section>
   </div>
 
