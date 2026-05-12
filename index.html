@@ -18,7 +18,7 @@
       <div>
         <h1>RideMint Ledger Pro</h1>
         <p>Professional rideshare finance app for logbook, GST, BAS, and tax summaries.</p>
-        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-05-11e</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-05-12a</p>
       </div>
       <div class="hero-actions" id="topActions">
         <button id="printReportBtn" class="btn secondary hidden">Print Current Report</button>
@@ -106,7 +106,8 @@
             <div class="full"><label>From</label><input name="from_location" placeholder="Suburb or start point" /></div>
             <div class="full"><label>To</label><input name="to_location" placeholder="Destination" /></div>
             <div class="full"><label>Notes</label><input name="notes" placeholder="Trip purpose notes" /></div>
-            <button class="btn full" type="submit">Add Logbook Entry</button>
+            <button class="btn full" id="tripSubmitBtn" type="submit">Add Logbook Entry</button>
+            <button class="btn secondary full hidden" id="tripCancelEditBtn" type="button">Cancel Edit</button>
           </form>
           <table id="tripTable"></table>
           <div class="row"><button id="exportLogbookCsvBtn" class="btn secondary" type="button">Export Logbook CSV</button></div>
@@ -123,7 +124,8 @@
             <div><label>GST Included</label><select name="gst_included"><option value="true">Yes</option><option value="false">No</option></select></div>
             <div><label>Platform Fee (AUD)</label><input type="number" name="platform_fee" step="0.01" min="0" value="0" /></div>
             <div><label>Platform Fee GST (AUD, auto)</label><input type="number" name="platform_fee_gst" id="platformFeeGst" step="0.01" min="0" value="0" readonly /></div>
-            <button class="btn full" type="submit">Add Fare</button>
+            <button class="btn full" id="fareSubmitBtn" type="submit">Add Fare</button>
+            <button class="btn secondary full hidden" id="fareCancelEditBtn" type="button">Cancel Edit</button>
           </form>
           <table id="fareTable"></table>
         </article>
@@ -138,7 +140,8 @@
             <div><label>Amount (AUD)</label><input type="number" name="amount" step="0.01" min="0" required /></div>
             <div><label>GST Claimable</label><select name="gst_claimable"><option value="true">Yes</option><option value="false">No</option></select></div>
             <div class="full"><label>Notes</label><input name="notes" /></div>
-            <button class="btn full" type="submit">Add Expense</button>
+            <button class="btn full" id="expenseSubmitBtn" type="submit">Add Expense</button>
+            <button class="btn secondary full hidden" id="expenseCancelEditBtn" type="button">Cancel Edit</button>
           </form>
           <table id="expenseTable"></table>
         </article>
@@ -151,7 +154,8 @@
             <div><label>Date</label><input type="date" name="date" required /></div>
             <div><label>Amount (AUD)</label><input type="number" name="amount" step="0.01" min="0" required /></div>
             <div><label>Reimbursed by Rider</label><select name="reimbursed"><option value="false">No</option><option value="true">Yes</option></select></div>
-            <button class="btn full" type="submit">Add Toll</button>
+            <button class="btn full" id="tollSubmitBtn" type="submit">Add Toll</button>
+            <button class="btn secondary full hidden" id="tollCancelEditBtn" type="button">Cancel Edit</button>
           </form>
           <table id="tollTable"></table>
         </article>
@@ -161,7 +165,7 @@
         <article class="card">
           <h2>Tax Settings</h2>
           <form id="taxForm" class="form-grid single">
-            <div><label>Other Income (AUD)</label><input type="number" name="other_income" min="0" step="0.01" value="0" /></div>
+            <div><label>Other Income (AUD) - Salary/Other Jobs</label><input type="number" name="other_income" min="0" step="0.01" value="0" /></div>
             <div><label>Super Contribution (AUD)</label><input type="number" name="super_contribution" min="0" step="0.01" value="0" /></div>
             <div><label>Auto Tax % (Calculated)</label><input type="text" id="autoTaxPct" value="0.0%" readonly /></div>
             <button type="submit" class="btn full">Save Tax Settings</button>

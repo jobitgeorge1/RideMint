@@ -15,6 +15,7 @@ let currentUser = null;
 let currentProfile = null;
 let isAdmin = false;
 let db = { trips: [], fares: [], expenses: [], tolls: [], tax: null, platforms: [] };
+let editing = { trips: null, fares: null, expenses: null, tolls: null };
 
 const el = (id) => document.getElementById(id);
 
@@ -30,7 +31,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-11e (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-12a (JS active)";
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "fareForm", "expenseForm", "tollForm"].forEach((id) => {
     const f = el(id);
@@ -69,6 +70,10 @@ function wireEvents() {
   bindClick("addPlatformBtn", addPlatformOption);
   bindClick("refreshPlatformsBtn", loadPlatformOptions);
   bindClick("importWorkbookBtn", importWorkbook);
+  bindClick("tripCancelEditBtn", () => clearEdit("trips"));
+  bindClick("fareCancelEditBtn", () => clearEdit("fares"));
+  bindClick("expenseCancelEditBtn", () => clearEdit("expenses"));
+  bindClick("tollCancelEditBtn", () => clearEdit("tolls"));
   bindFareFeeAutoCalc();
 }
 
@@ -237,7 +242,8 @@ async function logout() {
   currentUser = null;
   currentProfile = null;
   isAdmin = false;
-  db = { trips: [], fares: [], expenses: [], tolls: [], tax: null };
+  db = { trips: [], fares: [], expenses: [], tolls: [], tax: null, platforms: [] };
+  editing = { trips: null, fares: null, expenses: null, tolls: null };
   toggleApp();
   renderAll();
 }
@@ -531,7 +537,7 @@ async function onAddTrip(e) {
   const f = e.target;
   const odo_start = n(f.odo_start.value), odo_end = n(f.odo_end.value);
   if (odo_end <= odo_start) return alert("End odometer must be greater than start.");
-  await supabase.from("trips").insert({
+  const payload = {
     user_id: currentUser.id,
     date: f.date.value,
     purpose: f.purpose.value,
@@ -541,7 +547,10 @@ async function onAddTrip(e) {
     from_location: f.from_location.value,
     to_location: f.to_location.value,
     notes: f.notes.value
-  });
+  };
+  if (editing.trips) await supabase.from("trips").update(payload).eq("id", editing.trips);
+  else await supabase.from("trips").insert(payload);
+  clearEdit("trips");
   f.reset(); f.date.value = today;
   prefillTripStartOdo();
   await refreshAll();
@@ -550,7 +559,7 @@ async function onAddTrip(e) {
 async function onAddFare(e) {
   e.preventDefault();
   const f = e.target;
-  await supabase.from("fares").insert({
+  const payload = {
     user_id: currentUser.id,
     date: f.date.value,
     platform: f.platform.value,
@@ -558,7 +567,10 @@ async function onAddFare(e) {
     gst_included: f.gst_included.value === "true",
     platform_fee: n(f.platform_fee.value),
     platform_fee_gst: +(n(f.platform_fee.value) / 11).toFixed(2)
-  });
+  };
+  if (editing.fares) await supabase.from("fares").update(payload).eq("id", editing.fares);
+  else await supabase.from("fares").insert(payload);
+  clearEdit("fares");
   f.reset(); f.date.value = today;
   if (f.platform.options.length) f.platform.value = f.platform.options[0].value;
   f.platform_fee.value = 0;
@@ -569,14 +581,17 @@ async function onAddFare(e) {
 async function onAddExpense(e) {
   e.preventDefault();
   const f = e.target;
-  await supabase.from("expenses").insert({
+  const payload = {
     user_id: currentUser.id,
     date: f.date.value,
     category: f.category.value,
     amount: n(f.amount.value),
     gst_claimable: f.gst_claimable.value === "true",
     notes: f.notes.value
-  });
+  };
+  if (editing.expenses) await supabase.from("expenses").update(payload).eq("id", editing.expenses);
+  else await supabase.from("expenses").insert(payload);
+  clearEdit("expenses");
   f.reset(); f.date.value = today;
   await refreshAll();
 }
@@ -584,12 +599,15 @@ async function onAddExpense(e) {
 async function onAddToll(e) {
   e.preventDefault();
   const f = e.target;
-  await supabase.from("tolls").insert({
+  const payload = {
     user_id: currentUser.id,
     date: f.date.value,
     amount: n(f.amount.value),
     reimbursed: f.reimbursed.value === "true"
-  });
+  };
+  if (editing.tolls) await supabase.from("tolls").update(payload).eq("id", editing.tolls);
+  else await supabase.from("tolls").insert(payload);
+  clearEdit("tolls");
   f.reset(); f.date.value = today;
   await refreshAll();
 }
@@ -619,37 +637,38 @@ function renderAll() {
 
 function renderTripTable() {
   el("tripTable").innerHTML = tableHtml(
-    ["Date", "Purpose", "KM", "From", "To", "", ""],
-    db.trips.map((x) => [x.date, x.purpose, f2(x.km), esc(x.from_location), esc(x.to_location), esc(x.notes || ""), delBtn("trips", x.id)])
+    ["Date", "Purpose", "KM", "From", "To", "Actions"],
+    db.trips.map((x) => [x.date, x.purpose, f2(x.km), esc(x.from_location), esc(x.to_location), actionBtns("trips", x.id)])
   );
-  bindDelete();
+  bindRowActions();
 }
 function renderFareTable() {
   el("fareTable").innerHTML = tableHtml(
-    ["Date", "Platform", "Gross", "Platform Fee", "Fee GST", "GST", ""],
-    db.fares.map((x) => [x.date, esc(x.platform), aud(x.gross), aud(x.platform_fee || 0), aud(x.platform_fee_gst || 0), aud(gstFromFare(x)), delBtn("fares", x.id)])
+    ["Date", "Platform", "Gross", "Platform Fee", "Fee GST", "GST", "Actions"],
+    db.fares.map((x) => [x.date, esc(x.platform), aud(x.gross), aud(x.platform_fee || 0), aud(x.platform_fee_gst || 0), aud(gstFromFare(x)), actionBtns("fares", x.id)])
   );
-  bindDelete();
+  bindRowActions();
 }
 function renderExpenseTable() {
   el("expenseTable").innerHTML = tableHtml(
-    ["Date", "Category", "Amount", "GST Credit", ""],
-    db.expenses.map((x) => [x.date, esc(x.category), aud(x.amount), aud(x.gst_claimable ? x.amount / 11 : 0), delBtn("expenses", x.id)])
+    ["Date", "Category", "Amount", "GST Credit", "Actions"],
+    db.expenses.map((x) => [x.date, esc(x.category), aud(x.amount), aud(x.gst_claimable ? x.amount / 11 : 0), actionBtns("expenses", x.id)])
   );
-  bindDelete();
+  bindRowActions();
 }
 function renderTollTable() {
   el("tollTable").innerHTML = tableHtml(
-    ["Date", "Amount", "Reimbursed", ""],
-    db.tolls.map((x) => [x.date, aud(x.amount), x.reimbursed ? "Yes" : "No", delBtn("tolls", x.id)])
+    ["Date", "Amount", "Reimbursed", "Actions"],
+    db.tolls.map((x) => [x.date, aud(x.amount), x.reimbursed ? "Yes" : "No", actionBtns("tolls", x.id)])
   );
-  bindDelete();
+  bindRowActions();
 }
 
 function renderKpis() {
   const m = computeMetrics();
   const cards = [
     ["Gross Fare Income", aud(m.fareGross)],
+    ["Other Income (Salary etc.)", aud(n(db.tax?.other_income || 0))],
     ["Platform Fees", aud(m.platformFees || 0)],
     ["Total Expenses", aud(m.expenseTotal)],
     ["GST Payable Estimate", aud(m.gstPayable)],
@@ -810,7 +829,7 @@ function exportLogbookCsv() {
   downloadFile(`ridemint-logbook-${today}.csv`, lines.join("\n"), "text/csv");
 }
 
-function bindDelete() {
+function bindRowActions() {
   document.querySelectorAll(".del").forEach((b) => {
     b.onclick = async () => {
       const table = b.dataset.table;
@@ -818,6 +837,9 @@ function bindDelete() {
       await supabase.from(table).delete().eq("id", id);
       await refreshAll();
     };
+  });
+  document.querySelectorAll(".edit").forEach((b) => {
+    b.onclick = () => startEdit(b.dataset.table, b.dataset.id);
   });
 }
 
@@ -827,6 +849,50 @@ function tableHtml(headers, rows) {
   return h + b;
 }
 function delBtn(table, id) { return `<button class="del" data-table="${table}" data-id="${id}">Delete</button>`; }
+function editBtn(table, id) { return `<button class="edit" data-table="${table}" data-id="${id}">Edit</button>`; }
+function actionBtns(table, id) { return `<div class="actions-row">${editBtn(table, id)} ${delBtn(table, id)}</div>`; }
+
+function startEdit(table, id) {
+  if (table === "trips") {
+    const r = db.trips.find((x) => x.id === id); if (!r) return;
+    const f = el("tripForm"); editing.trips = id;
+    f.date.value = r.date; f.purpose.value = r.purpose; f.odo_start.value = r.odo_start; f.odo_end.value = r.odo_end;
+    f.from_location.value = r.from_location || ""; f.to_location.value = r.to_location || ""; f.notes.value = r.notes || "";
+    setEditUI("tripSubmitBtn", "tripCancelEditBtn", true, "Update Logbook Entry");
+  }
+  if (table === "fares") {
+    const r = db.fares.find((x) => x.id === id); if (!r) return;
+    const f = el("fareForm"); editing.fares = id;
+    f.date.value = r.date; f.platform.value = r.platform; f.gross.value = r.gross; f.gst_included.value = String(!!r.gst_included);
+    f.platform_fee.value = r.platform_fee || 0; f.platform_fee_gst.value = (n(r.platform_fee) / 11).toFixed(2);
+    setEditUI("fareSubmitBtn", "fareCancelEditBtn", true, "Update Fare");
+  }
+  if (table === "expenses") {
+    const r = db.expenses.find((x) => x.id === id); if (!r) return;
+    const f = el("expenseForm"); editing.expenses = id;
+    f.date.value = r.date; f.category.value = r.category; f.amount.value = r.amount; f.gst_claimable.value = String(!!r.gst_claimable); f.notes.value = r.notes || "";
+    setEditUI("expenseSubmitBtn", "expenseCancelEditBtn", true, "Update Expense");
+  }
+  if (table === "tolls") {
+    const r = db.tolls.find((x) => x.id === id); if (!r) return;
+    const f = el("tollForm"); editing.tolls = id;
+    f.date.value = r.date; f.amount.value = r.amount; f.reimbursed.value = String(!!r.reimbursed);
+    setEditUI("tollSubmitBtn", "tollCancelEditBtn", true, "Update Toll");
+  }
+}
+
+function clearEdit(table) {
+  if (table === "trips") { editing.trips = null; setEditUI("tripSubmitBtn", "tripCancelEditBtn", false, "Add Logbook Entry"); }
+  if (table === "fares") { editing.fares = null; setEditUI("fareSubmitBtn", "fareCancelEditBtn", false, "Add Fare"); }
+  if (table === "expenses") { editing.expenses = null; setEditUI("expenseSubmitBtn", "expenseCancelEditBtn", false, "Add Expense"); }
+  if (table === "tolls") { editing.tolls = null; setEditUI("tollSubmitBtn", "tollCancelEditBtn", false, "Add Toll"); }
+}
+
+function setEditUI(submitId, cancelId, isEditing, submitLabel) {
+  const s = el(submitId), c = el(cancelId);
+  if (s) s.textContent = submitLabel;
+  if (c) c.classList.toggle("hidden", !isEditing);
+}
 function gstFromFare(x) { return x.gst_included ? n(x.gross) / 11 : n(x.gross) * 0.1; }
 function estimateTaxAu(income) {
   let tax = 0, prev = 0;
