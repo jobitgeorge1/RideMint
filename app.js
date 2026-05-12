@@ -68,6 +68,7 @@ function wireEvents() {
   bindClick("refreshAdminsBtn", loadAdminUsers);
   bindClick("addPlatformBtn", addPlatformOption);
   bindClick("refreshPlatformsBtn", loadPlatformOptions);
+  bindClick("importWorkbookBtn", importWorkbook);
   bindFareFeeAutoCalc();
 }
 
@@ -416,6 +417,113 @@ async function addPlatformOption() {
   setStatus("settingsStatus", `Platform added: ${name}`);
   await loadPlatformOptions();
   renderPlatformsTable();
+}
+
+async function importWorkbook() {
+  if (!supabase || !currentUser) return setStatus("importStatus", "Login required.", true);
+  const file = el("importWorkbookFile")?.files?.[0];
+  if (!file) return setStatus("importStatus", "Choose an Excel file first.", true);
+  if (!window.XLSX) return setStatus("importStatus", "XLSX parser not loaded.", true);
+  setStatus("importStatus", "Reading workbook...");
+  try {
+    const data = await file.arrayBuffer();
+    const wb = window.XLSX.read(data, { type: "array" });
+    const incomeRows = parseIncomeSheet(wb);
+    const expenseRows = parseExpenseSheet(wb);
+    const logbookRows = parseLogbookSheet(wb);
+
+    let insertedIncome = 0, insertedExpense = 0, insertedLogbook = 0;
+    if (incomeRows.length) {
+      const { error } = await supabase.from("fares").insert(incomeRows);
+      if (error) throw new Error(`Income import failed: ${error.message}`);
+      insertedIncome = incomeRows.length;
+    }
+    if (expenseRows.length) {
+      const { error } = await supabase.from("expenses").insert(expenseRows);
+      if (error) throw new Error(`Expenses import failed: ${error.message}`);
+      insertedExpense = expenseRows.length;
+    }
+    if (logbookRows.length) {
+      const { error } = await supabase.from("trips").insert(logbookRows);
+      if (error) throw new Error(`Logbook import failed: ${error.message}`);
+      insertedLogbook = logbookRows.length;
+    }
+    await refreshAll();
+    setStatus("importStatus", `Imported successfully. Income: ${insertedIncome}, Expenses: ${insertedExpense}, Logbook: ${insertedLogbook}.`);
+  } catch (err) {
+    setStatus("importStatus", err?.message || "Import failed.", true);
+  }
+}
+
+function parseIncomeSheet(wb) {
+  const ws = wb.Sheets["Uber Income & GST"];
+  if (!ws) return [];
+  const rows = window.XLSX.utils.sheet_to_json(ws, { defval: "" });
+  return rows
+    .map((r) => ({
+      user_id: currentUser.id,
+      date: normalizeExcelDate(r["Date"]),
+      platform: "Uber",
+      gross: n(r["Trip Gross Fare"]),
+      gst_included: true,
+      platform_fee: n(r["Uber Service Fee"]),
+      platform_fee_gst: n(r["GST on Uber Fee"])
+    }))
+    .filter((x) => x.date && x.gross > 0);
+}
+
+function parseExpenseSheet(wb) {
+  const ws = wb.Sheets["Expenses & GST Credits"];
+  if (!ws) return [];
+  const rows = window.XLSX.utils.sheet_to_json(ws, { defval: "" });
+  return rows
+    .map((r) => {
+      const notes = [r["Supplier"], r["Notes"]].filter(Boolean).join(" | ");
+      return {
+        user_id: currentUser.id,
+        date: normalizeExcelDate(r["Date"]),
+        category: String(r["Expense Type"] || "Other"),
+        amount: n(r["Total Amount"]),
+        gst_claimable: n(r["GST Amount"]) > 0 || n(r["GST Claimable"]) > 0,
+        notes
+      };
+    })
+    .filter((x) => x.date && x.amount > 0);
+}
+
+function parseLogbookSheet(wb) {
+  const ws = wb.Sheets["Logbook"];
+  if (!ws) return [];
+  const rows = window.XLSX.utils.sheet_to_json(ws, { defval: "" });
+  return rows
+    .map((r) => {
+      const purposeRaw = String(r["Purpose of Trip"] || "").toLowerCase();
+      const purpose = purposeRaw.includes("uber") || purposeRaw.includes("ride") ? "Business" : "Private";
+      return {
+        user_id: currentUser.id,
+        date: normalizeExcelDate(r["Date"]),
+        purpose,
+        odo_start: n(r["Start Odometer"]),
+        odo_end: n(r["End Odometer"]),
+        km: n(r["KM"]) || Math.max(0, n(r["End Odometer"]) - n(r["Start Odometer"])),
+        from_location: "",
+        to_location: "",
+        notes: String(r["Notes"] || "")
+      };
+    })
+    .filter((x) => x.date && x.odo_end > x.odo_start);
+}
+
+function normalizeExcelDate(v) {
+  if (v === null || v === undefined || v === "") return "";
+  if (typeof v === "number") {
+    const o = window.XLSX.SSF.parse_date_code(v);
+    if (!o) return "";
+    return `${o.y}-${String(o.m).padStart(2, "0")}-${String(o.d).padStart(2, "0")}`;
+  }
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString().slice(0, 10);
 }
 
 async function onAddTrip(e) {

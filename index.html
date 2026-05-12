@@ -10,6 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
   <div class="page-shell">
@@ -188,6 +189,13 @@
         <section class="tab-panel hidden" id="tab-settings">
         <article class="card">
           <h2>Admin Settings</h2>
+          <h3 style="margin:10px 0 8px;">Import Existing Excel Tracker</h3>
+          <div class="small-note">Supported sheets: <strong>Uber Income & GST</strong>, <strong>Expenses & GST Credits</strong>, <strong>Logbook</strong>.</div>
+          <div class="row">
+            <input id="importWorkbookFile" type="file" accept=".xlsx,.xls" />
+            <button id="importWorkbookBtn" class="btn" type="button">Import Workbook</button>
+          </div>
+          <div class="status" id="importStatus"></div>
           <div id="settingsGuard" class="small-note">Only admin users can access settings.</div>
           <div id="adminSettingsBody" class="hidden">
             <h3 style="margin:10px 0 8px;">Connection Setup</h3>
