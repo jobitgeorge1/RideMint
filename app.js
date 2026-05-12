@@ -6,6 +6,8 @@ if (window.__RIDEMINT_APP_LOADED__) {
 window.__RIDEMINT_APP_LOADED__ = true;
 
 const APP_KEY = "ridemint-pro-config";
+const DEFAULT_SUPABASE_URL = "";
+const DEFAULT_SUPABASE_ANON = "";
 const today = new Date().toISOString().slice(0, 10);
 
 let supabase = null;
@@ -29,7 +31,7 @@ if (document.readyState === "loading") {
 
 function boot() {
   if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-11e (JS active)";
-  setStatus("configStatus", "App ready. Enter Supabase details and click Save Connection.");
+  setStatus("authStatus", "Login to continue.");
   ["tripForm", "fareForm", "expenseForm", "tollForm"].forEach((id) => {
     const f = el(id);
     if (f?.date) f.date.value = today;
@@ -43,7 +45,6 @@ function boot() {
 }
 
 function wireEvents() {
-  bindClick("saveConfigBtn", saveConfig);
   bindClick("saveConfigBtnAdmin", saveConfigFromAdmin);
   bindClick("signupBtn", signUp);
   bindClick("loginBtn", signIn);
@@ -82,8 +83,6 @@ function bindFareFeeAutoCalc() {
 }
 
 function saveConfigFromAdmin() {
-  if (el("sbUrlAdmin")) el("sbUrl").value = el("sbUrlAdmin").value;
-  if (el("sbAnonAdmin")) el("sbAnon").value = el("sbAnonAdmin").value;
   return saveConfig();
 }
 
@@ -100,44 +99,52 @@ function bindSubmit(id, handler) {
 }
 
 function loadConfigUI() {
-  const cfg = readConfig();
-  updateConfigCardVisibility();
-  if (!cfg?.url || !cfg?.anon) return;
-  el("sbUrl").value = cfg.url;
-  el("sbAnon").value = cfg.anon;
+  const cfg = readConfigWithDefaults();
+  if (!cfg?.url || !cfg?.anon) {
+    setStatus("authStatus", "System config missing. Admin: login from a configured browser and set Settings.");
+    return;
+  }
   syncConnectionInputs();
   initSupabase(cfg.url, cfg.anon);
 }
 
 function syncConnectionInputs() {
-  if (el("sbUrlAdmin")) el("sbUrlAdmin").value = el("sbUrl")?.value || "";
-  if (el("sbAnonAdmin")) el("sbAnonAdmin").value = el("sbAnon")?.value || "";
+  const cfg = readConfigWithDefaults();
+  if (el("sbUrlAdmin")) el("sbUrlAdmin").value = cfg.url || "";
+  if (el("sbAnonAdmin")) el("sbAnonAdmin").value = cfg.anon || "";
 }
 
 function readConfig() {
   try { return JSON.parse(localStorage.getItem(APP_KEY) || "{}"); } catch { return {}; }
 }
 
+function readConfigWithDefaults() {
+  const c = readConfig();
+  return {
+    url: c.url || DEFAULT_SUPABASE_URL,
+    anon: c.anon || DEFAULT_SUPABASE_ANON
+  };
+}
+
 async function saveConfig() {
-  const url = el("sbUrl").value.trim();
-  const anon = el("sbAnon").value.trim();
-  if (!url || !anon) return setStatus("configStatus", "Enter URL and anon key.", true);
+  const url = (el("sbUrlAdmin")?.value || "").trim();
+  const anon = (el("sbAnonAdmin")?.value || "").trim();
+  if (!url || !anon) return setStatus("settingsStatus", "Enter URL and anon key.", true);
   if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url)) {
-    return setStatus("configStatus", "URL format should be https://<project-ref>.supabase.co", true);
+    return setStatus("settingsStatus", "URL format should be https://<project-ref>.supabase.co", true);
   }
   if (!window.supabase?.createClient) {
-    return setStatus("configStatus", "Supabase library failed to load. Check internet and reload.", true);
+    return setStatus("settingsStatus", "Supabase library failed to load. Check internet and reload.", true);
   }
-  const btn = el("saveConfigBtn");
+  const btn = el("saveConfigBtnAdmin");
   btn.disabled = true;
-  setStatus("configStatus", "Testing connection...");
+  setStatus("settingsStatus", "Testing connection...");
   localStorage.setItem(APP_KEY, JSON.stringify({ url, anon }));
   syncConnectionInputs();
-  updateConfigCardVisibility();
   const ok = await initSupabase(url, anon);
   btn.disabled = false;
   if (!ok) return;
-  setStatus("configStatus", "Connection saved and verified. You can now sign up/sign in.");
+  setStatus("settingsStatus", "Connection saved and verified.");
 }
 
 async function initSupabase(url, anon) {
@@ -151,7 +158,7 @@ async function initSupabase(url, anon) {
     return true;
   } catch (err) {
     const msg = err?.message || "Could not initialize Supabase.";
-    setStatus("configStatus", `Connection failed: ${msg}`, true);
+    setStatus("settingsStatus", `Connection failed: ${msg}`, true);
     supabase = null;
     currentUser = null;
     toggleApp();
@@ -239,14 +246,7 @@ function toggleApp() {
   el("logoutBtn").classList.toggle("hidden", !currentUser);
   el("printReportBtn").classList.toggle("hidden", !currentUser);
   el("authPages").classList.toggle("hidden", !!currentUser);
-  updateConfigCardVisibility();
   applyAdminVisibility();
-}
-
-function updateConfigCardVisibility() {
-  const cfg = readConfig();
-  const hasCfg = !!(cfg?.url && cfg?.anon);
-  el("configCard").classList.toggle("hidden", hasCfg || !!currentUser);
 }
 
 function showAuthPage(type) {
