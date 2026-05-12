@@ -129,6 +129,41 @@ th { color: var(--muted); font-weight: 700; }
   .hero-actions .btn { flex: 1; }
   .row .btn { width: 100%; }
 }
+@media (min-width: 961px) {
+  .page-shell { max-width: 1320px; padding: 20px 20px 30px; }
+  .hero { border-radius: 18px; padding: 20px; }
+  .app-shell { display: flex; gap: 16px; align-items: flex-start; }
+  .sidebar-lite {
+    display: block;
+    width: 230px;
+    background: #182033;
+    border-radius: 16px;
+    padding: 14px;
+    color: #d3deef;
+    box-shadow: var(--shadow);
+    position: sticky;
+    top: 14px;
+  }
+  .main-pane { flex: 1; min-width: 0; }
+  .tabbar {
+    position: static;
+    background: rgba(255,255,255,0.92);
+    border-radius: 14px;
+    box-shadow: none;
+    padding: 6px;
+  }
+  .tab {
+    min-width: auto;
+    padding: 10px 14px;
+    font-size: 0.86rem;
+  }
+  .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .card { border-radius: 14px; }
+  .fab {
+    right: 24px;
+    bottom: 20px;
+  }
+}
 @media (max-width: 640px) {
   body { background: #eaf1f7; }
   .page-shell { max-width: 430px; padding: 8px 8px calc(98px + env(safe-area-inset-bottom)); }

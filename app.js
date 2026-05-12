@@ -32,7 +32,8 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-12a (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-12b (JS active)";
+  registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "fareForm", "expenseForm", "tollForm"].forEach((id) => {
     const f = el(id);
@@ -980,5 +981,12 @@ function downloadFile(name, content, type) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+  });
 }
 })();
