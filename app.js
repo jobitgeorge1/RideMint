@@ -707,8 +707,8 @@ function renderAll() {
 
 function renderTripTable() {
   el("tripTable").innerHTML = tableHtml(
-    ["Date", "Purpose", "KM", "From", "To", "Actions"],
-    db.trips.map((x) => [x.date, x.purpose, f2(x.km), esc(x.from_location), esc(x.to_location), actionBtns("trips", x.id)])
+    ["Date", "Purpose", "Start Odo", "End Odo", "KM", "Actions"],
+    db.trips.map((x) => [x.date, x.purpose, f2(x.odo_start), f2(x.odo_end), f2(x.km), actionBtns("trips", x.id)])
   );
   bindRowActions();
 }
@@ -802,13 +802,12 @@ function computeMetrics(overrides = {}) {
   const superContrib = n(overrides.super_contribution ?? db.tax?.super_contribution ?? 0);
   const rideshareTaxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - deductibleTolls - superContrib);
   const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncome);
-  const incomeTax = estimateTaxAu(taxableIncome);
-  const medicare = taxableIncome * 0.02;
-  const totalTax = incomeTax + medicare;
-  const rideshareOnlyIncomeTax = estimateTaxAu(rideshareTaxableIncome);
-  const rideshareOnlyMedicare = rideshareTaxableIncome * 0.02;
-  const uberTaxPayable = Math.max(0, totalTax - (estimateTaxAu(otherIncome) + otherIncome * 0.02));
-  const otherIncomeTaxPaid = Math.max(0, totalTax - (rideshareOnlyIncomeTax + rideshareOnlyMedicare));
+  const taxBreakdown = computeTaxBreakdown(rideshareTaxableIncome, otherIncome);
+  const incomeTax = taxBreakdown.incomeTax;
+  const medicare = taxBreakdown.medicare;
+  const totalTax = taxBreakdown.totalTax;
+  const uberTaxPayable = taxBreakdown.uberTaxPayable;
+  const otherIncomeTaxPaid = taxBreakdown.otherIncomeTaxPaid;
   const slab = taxSlabForIncome(taxableIncome);
 
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
@@ -854,11 +853,11 @@ function renderReport(forceType = null) {
   const buckets = bucketizeByPeriod(period, year);
 
   let html = `<h3>ATO Summary Report</h3><div class="meta">Period: ${cap(period)} | Year: ${year} | Generated: ${new Date().toLocaleString("en-AU")}</div>`;
-  html += `<table><tr><th>Period</th><th>Fare</th><th>Expenses</th><th>GST Collected</th><th>GST Credits</th><th>GST Payable</th><th>Taxable Income</th><th>Tax+Medicare</th><th>In-Hand</th></tr>`;
+  html += `<table><tr><th>Period</th><th>Fare</th><th>Expenses</th><th>GST Collected</th><th>GST Credits</th><th>GST Payable</th><th>Taxable Income</th><th>Income Tax Payable</th><th>PAYG Paid</th><th>In-Hand</th></tr>`;
 
   buckets.forEach((b) => {
     const m = computeForRange(b.from, b.to);
-    html += `<tr><td>${b.label}</td><td>${aud(m.fareGross)}</td><td>${aud(m.expenseTotal)}</td><td>${aud(m.fareGst)}</td><td>${aud(m.expenseGstCredit)}</td><td>${aud(m.gstPayable)}</td><td>${aud(m.taxableIncome)}</td><td>${aud(m.totalTax)}</td><td>${aud(m.inHand)}</td></tr>`;
+    html += `<tr><td>${b.label}</td><td>${aud(m.fareGross)}</td><td>${aud(m.expenseTotal)}</td><td>${aud(m.fareGst)}</td><td>${aud(m.expenseGstCredit)}</td><td>${aud(m.gstPayable)}</td><td>${aud(m.taxableIncome)}</td><td>${aud(m.uberTaxPayable)}</td><td>${aud(m.otherIncomeTaxPaid)}</td><td>${aud(m.inHand)}</td></tr>`;
   });
   html += `</table>`;
 
@@ -877,11 +876,12 @@ function renderReport(forceType = null) {
     <h3>Tax Summary (Estimate)</h3>
     <div class="report-grid">
       ${line("Taxable Income", aud(all.taxableIncome))}
+      ${line("PAYG Income Entered", aud(n(db.tax?.other_income || 0)))}
       ${line("Tip / Extra", aud(all.tipExtra))}
       ${line("Income Tax", aud(all.incomeTax))}
       ${line("Medicare Levy (2%)", aud(all.medicare))}
       ${line("Total Tax", aud(all.totalTax))}
-      ${line("Uber Tax Payable", aud(all.uberTaxPayable))}
+      ${line("Income Tax Payable", aud(all.uberTaxPayable))}
       ${line("PAYG Tax Already Paid", aud(all.otherIncomeTaxPaid))}
       ${line("Current Tax Slab", esc(all.slabLabel))}
       ${line("Net In-Hand", aud(all.inHand))}
@@ -910,6 +910,8 @@ function downloadReportWorkbook(reportType = "full") {
       GST_Credits: round2(metrics.expenseGstCredit),
       GST_Payable: round2(metrics.gstPayable),
       Taxable_Income: round2(metrics.taxableIncome),
+      Income_Tax_Payable: round2(metrics.uberTaxPayable),
+      PAYG_Tax_Paid: round2(metrics.otherIncomeTaxPaid),
       Tax_Medicare: round2(metrics.totalTax),
       In_Hand: round2(metrics.inHand)
     };
@@ -969,6 +971,8 @@ function downloadReportWorkbook(reportType = "full") {
     { Field: "Expenses", Value: round2(allMetrics.expenseTotal) },
     { Field: "GST Payable", Value: round2(allMetrics.gstPayable) },
     { Field: "Taxable Income", Value: round2(allMetrics.taxableIncome) },
+    { Field: "Income Tax Payable", Value: round2(allMetrics.uberTaxPayable) },
+    { Field: "PAYG Tax Already Paid", Value: round2(allMetrics.otherIncomeTaxPaid) },
     { Field: "Tax + Medicare", Value: round2(allMetrics.totalTax) },
     { Field: "Effective Tax %", Value: round2(allMetrics.effectiveTaxRate * 100) },
     { Field: "In Hand", Value: round2(allMetrics.inHand) }
@@ -987,7 +991,7 @@ function downloadReportWorkbook(reportType = "full") {
     Income_Tax: round2(allMetrics.incomeTax),
     Medicare: round2(allMetrics.medicare),
     Total_Tax: round2(allMetrics.totalTax),
-    Uber_Tax_Payable: round2(allMetrics.uberTaxPayable),
+    Income_Tax_Payable: round2(allMetrics.uberTaxPayable),
     PAYG_Tax_Already_Paid: round2(allMetrics.otherIncomeTaxPaid),
     Marginal_Tax_Slab: allMetrics.slabLabel,
     Effective_Tax_Pct: round2(allMetrics.effectiveTaxRate * 100),
@@ -1037,14 +1041,33 @@ function computeForRange(from, to) {
 
   const deductibleExpenses = (expenseTotal + platformFees) * businessUsePct;
   const deductibleTolls = (tollTotal - reimbursedTolls) * businessUsePct;
-  const taxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - deductibleTolls + n(db.tax?.other_income || 0) - n(db.tax?.super_contribution || 0));
-  const incomeTax = estimateTaxAu(taxableIncome);
-  const medicare = taxableIncome * 0.02;
-  const totalTax = incomeTax + medicare;
+  const otherIncomeAllocated = allocateAnnualValueToRange(n(db.tax?.other_income || 0), from, to);
+  const superAllocated = allocateAnnualValueToRange(n(db.tax?.super_contribution || 0), from, to);
+  const rideshareTaxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - deductibleTolls - superAllocated);
+  const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncomeAllocated);
+  const taxBreakdown = computeTaxBreakdown(rideshareTaxableIncome, otherIncomeAllocated);
+  const incomeTax = taxBreakdown.incomeTax;
+  const medicare = taxBreakdown.medicare;
+  const totalTax = taxBreakdown.totalTax;
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
-  const inHand = fareGross + tipExtra - expenseTotal - platformFees - (tollTotal - reimbursedTolls) - totalTax - gstPayable;
+  const inHand = fareGross + tipExtra - expenseTotal - platformFees - (tollTotal - reimbursedTolls) - taxBreakdown.uberTaxPayable - gstPayable;
 
-  return { fareGross, tipExtra, expenseTotal, fareGst, expenseGstCredit, gstPayable, taxableIncome, totalTax, inHand };
+  return {
+    fareGross,
+    tipExtra,
+    expenseTotal,
+    fareGst,
+    expenseGstCredit,
+    gstPayable,
+    rideshareTaxableIncome,
+    taxableIncome,
+    incomeTax,
+    medicare,
+    totalTax,
+    uberTaxPayable: taxBreakdown.uberTaxPayable,
+    otherIncomeTaxPaid: taxBreakdown.otherIncomeTaxPaid,
+    inHand
+  };
 }
 
 function bucketizeByPeriod(period, year) {
@@ -1172,7 +1195,7 @@ function renderTaxBreakdown() {
       <strong>Rideshare Tax Payable</strong>
       <div class="meta">Tax still payable from Uber and rideshare activity after excluding PAYG salary tax already withheld.</div>
       ${line("Rideshare Taxable Income", aud(m.rideshareTaxableIncome))}
-      ${line("Uber Tax Payable", aud(m.uberTaxPayable))}
+      ${line("Income Tax Payable", aud(m.uberTaxPayable))}
       ${line("GST Payable", aud(m.gstPayable))}
     </div>
     <div class="tax-panel">
@@ -1204,6 +1227,30 @@ function taxSlabForIncome(income) {
     { upto: Infinity, rate: 0.45, label: "45% above $190,000" }
   ];
   return brackets.find((x) => income <= x.upto) || brackets[brackets.length - 1];
+}
+
+function computeTaxBreakdown(rideshareTaxableIncome, otherIncome) {
+  const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncome);
+  const incomeTax = estimateTaxAu(taxableIncome);
+  const medicare = taxableIncome * 0.02;
+  const totalTax = incomeTax + medicare;
+  const rideshareOnlyIncomeTax = estimateTaxAu(rideshareTaxableIncome);
+  const rideshareOnlyMedicare = rideshareTaxableIncome * 0.02;
+  const otherIncomeTaxPaid = Math.max(0, totalTax - (rideshareOnlyIncomeTax + rideshareOnlyMedicare));
+  const uberTaxPayable = Math.max(0, totalTax - (estimateTaxAu(otherIncome) + otherIncome * 0.02));
+  return { incomeTax, medicare, totalTax, otherIncomeTaxPaid, uberTaxPayable };
+}
+
+function allocateAnnualValueToRange(total, from, to) {
+  const start = parseLocalDate(from);
+  const end = parseLocalDate(to);
+  const yearStart = new Date(start.getFullYear(), 0, 1);
+  const yearEnd = new Date(start.getFullYear(), 11, 31);
+  const clippedStart = start < yearStart ? yearStart : start;
+  const clippedEnd = end > yearEnd ? yearEnd : end;
+  const daysInRange = Math.max(0, Math.round((clippedEnd - clippedStart) / 86400000) + 1);
+  const daysInYear = Math.round((yearEnd - yearStart) / 86400000) + 1;
+  return round2((n(total) * daysInRange) / daysInYear);
 }
 
 function weeklyFareSummaries() {
