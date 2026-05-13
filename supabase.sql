@@ -20,16 +20,29 @@ create table if not exists fares (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   date date not null,
+  week_end date,
   platform text not null,
   gross numeric(12,2) not null,
   gst_included boolean not null default true,
   platform_fee numeric(12,2) not null default 0,
   platform_fee_gst numeric(12,2) not null default 0,
+  tip_extra numeric(12,2) not null default 0,
+  net_payout numeric(12,2) not null default 0,
   created_at timestamptz default now()
 );
 
+alter table fares add column if not exists week_end date;
 alter table fares add column if not exists platform_fee numeric(12,2) not null default 0;
 alter table fares add column if not exists platform_fee_gst numeric(12,2) not null default 0;
+alter table fares add column if not exists tip_extra numeric(12,2) not null default 0;
+alter table fares add column if not exists net_payout numeric(12,2) not null default 0;
+update fares
+set week_end = coalesce(week_end, date + 6),
+    net_payout = case
+      when coalesce(net_payout, 0) = 0 then coalesce(gross, 0) + coalesce(tip_extra, 0) - coalesce(platform_fee, 0)
+      else net_payout
+    end
+where week_end is null or coalesce(net_payout, 0) = 0;
 
 create table if not exists expenses (
   id uuid primary key default gen_random_uuid(),

@@ -32,13 +32,14 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-13a (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-13b (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
-  ["tripForm", "fareForm", "expenseForm", "tollForm"].forEach((id) => {
+  ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
     const f = el(id);
     if (f?.date) f.date.value = today;
   });
+  if (el("fareForm")?.date) el("fareForm").date.value = weekRange(today).start;
   if (el("summaryYear")) el("summaryYear").value = new Date().getFullYear();
   wireEvents();
   setupTabs();
@@ -77,7 +78,6 @@ function wireEvents() {
   bindClick("fareCancelEditBtn", () => clearEdit("fares"));
   bindClick("expenseCancelEditBtn", () => clearEdit("expenses"));
   bindClick("tollCancelEditBtn", () => clearEdit("tolls"));
-  bindClick("fabBtn", onFabClick);
   bindFareFeeAutoCalc();
   bindFareWeekFields();
   bindTaxLivePreview();
@@ -88,9 +88,14 @@ function bindFareFeeAutoCalc() {
   if (!form || !form.platform_fee) return;
   const recalc = () => {
     const fee = n(form.platform_fee.value);
+    const tip = n(form.tip_extra?.value);
+    const gross = n(form.gross?.value);
     form.platform_fee_gst.value = (fee / 11).toFixed(2);
+    if (form.net_payout) form.net_payout.value = round2(gross + tip - fee).toFixed(2);
   };
   form.platform_fee.addEventListener("input", recalc);
+  form.gross?.addEventListener("input", recalc);
+  form.tip_extra?.addEventListener("input", recalc);
   recalc();
 }
 
@@ -277,9 +282,7 @@ function toggleApp() {
   el("logoutBtn").classList.toggle("hidden", !currentUser);
   el("printReportBtn").classList.toggle("hidden", !currentUser);
   el("authPages").classList.toggle("hidden", !!currentUser);
-  el("fabBtn").classList.toggle("hidden", !currentUser);
   applyAdminVisibility();
-  updateFab();
 }
 
 function showAuthPage(type) {
@@ -296,7 +299,6 @@ function setupTabs() {
     if (panel) panel.classList.remove("hidden");
     activeTab = key;
     updateSectionHeader(key);
-    updateFab();
   };
   document.querySelectorAll(".tab, .nav-item-lite").forEach((t) => {
     t.addEventListener("click", () => activate(t.dataset.tab));
@@ -306,9 +308,9 @@ function setupTabs() {
 
 function updateSectionHeader(key) {
   const map = {
-    dashboard: ["Dashboard", "Business snapshot and performance metrics."],
+    dashboard: ["Dashboard", "Weekly Uber money view with GST, fees, tolls and tax."],
     logbook: ["Logbook", "ATO-compatible trip and odometer record."],
-    income: ["Income", "Fares, platform fees, and GST tracking."],
+    income: ["Income", "Weekly Uber entries from Monday to Sunday."],
     expenses: ["Expenses", "Costs and claimable GST credits."],
     tolls: ["Tolls", "Track toll payments and reimbursements."],
     tax: ["Tax", "Tax inputs and calculated effective tax rate."],
@@ -428,8 +430,10 @@ function updateFareWeekFields() {
   if (!form?.date) return;
   const date = form.date.value || today;
   const week = weekRange(date);
+  form.date.value = week.start;
   if (el("fareWeekStart")) el("fareWeekStart").value = week.start;
   if (el("fareWeekEnd")) el("fareWeekEnd").value = week.end;
+  if (form.net_payout) form.net_payout.value = round2(n(form.gross?.value) + n(form.tip_extra?.value) - n(form.platform_fee?.value)).toFixed(2);
 }
 
 function renderPlatformsTable() {
@@ -474,8 +478,9 @@ async function importWorkbook() {
     const incomeRows = parseIncomeSheet(wb);
     const expenseRows = parseExpenseSheet(wb);
     const logbookRows = parseLogbookSheet(wb);
+    const tollRows = parseTollSheet(wb);
 
-    let insertedIncome = 0, insertedExpense = 0, insertedLogbook = 0;
+    let insertedIncome = 0, insertedExpense = 0, insertedLogbook = 0, insertedTolls = 0;
     if (incomeRows.length) {
       const { error } = await supabase.from("fares").insert(incomeRows);
       if (error) throw new Error(`Income import failed: ${error.message}`);
@@ -491,8 +496,13 @@ async function importWorkbook() {
       if (error) throw new Error(`Logbook import failed: ${error.message}`);
       insertedLogbook = logbookRows.length;
     }
+    if (tollRows.length) {
+      const { error } = await supabase.from("tolls").insert(tollRows);
+      if (error) throw new Error(`Toll import failed: ${error.message}`);
+      insertedTolls = tollRows.length;
+    }
     await refreshAll();
-    setStatus("importStatus", `Imported successfully. Income: ${insertedIncome}, Expenses: ${insertedExpense}, Logbook: ${insertedLogbook}.`);
+    setStatus("importStatus", `Imported successfully. Income: ${insertedIncome}, Expenses: ${insertedExpense}, Logbook: ${insertedLogbook}, Tolls: ${insertedTolls}.`);
   } catch (err) {
     setStatus("importStatus", err?.message || "Import failed.", true);
   }
@@ -505,12 +515,15 @@ function parseIncomeSheet(wb) {
   return rows
     .map((r) => ({
       user_id: currentUser.id,
-      date: normalizeExcelDate(r["Date"]),
+      date: normalizeExcelDate(r["From Date"] || r["Date"]),
+      week_end: normalizeExcelDate(r["To Date"]) || addDays(normalizeExcelDate(r["From Date"] || r["Date"]), 6),
       platform: "Uber",
       gross: n(r["Trip Gross Fare"]),
       gst_included: true,
       platform_fee: n(r["Uber Service Fee"]),
-      platform_fee_gst: n(r["GST on Uber Fee"])
+      platform_fee_gst: n(r["GST on Uber Fee"]),
+      tip_extra: n(r["Tip/Extra"]),
+      net_payout: n(r["Net Payout"]) || round2(n(r["Trip Gross Fare"]) + n(r["Tip/Extra"]) - n(r["Uber Service Fee"]))
     }))
     .filter((x) => x.date && x.gross > 0);
 }
@@ -557,6 +570,20 @@ function parseLogbookSheet(wb) {
     .filter((x) => x.date && x.odo_end > x.odo_start);
 }
 
+function parseTollSheet(wb) {
+  const ws = wb.Sheets["Toll"];
+  if (!ws) return [];
+  const rows = window.XLSX.utils.sheet_to_json(ws, { defval: "" });
+  return rows
+    .map((r) => ({
+      user_id: currentUser.id,
+      date: normalizeExcelDate(r["Date"]),
+      amount: n(r["Payment"] || r["Amount"]),
+      reimbursed: false
+    }))
+    .filter((x) => x.date && x.amount > 0);
+}
+
 function normalizeExcelDate(v) {
   if (v === null || v === undefined || v === "") return "";
   if (typeof v === "number") {
@@ -599,19 +626,24 @@ async function onAddFare(e) {
   const payload = {
     user_id: currentUser.id,
     date: f.date.value,
+    week_end: el("fareWeekEnd")?.value || addDays(f.date.value, 6),
     platform: f.platform.value,
     gross: n(f.gross.value),
     gst_included: f.gst_included.value === "true",
     platform_fee: n(f.platform_fee.value),
-    platform_fee_gst: +(n(f.platform_fee.value) / 11).toFixed(2)
+    platform_fee_gst: +(n(f.platform_fee.value) / 11).toFixed(2),
+    tip_extra: n(f.tip_extra.value),
+    net_payout: round2(n(f.gross.value) + n(f.tip_extra.value) - n(f.platform_fee.value))
   };
   if (editing.fares) await supabase.from("fares").update(payload).eq("id", editing.fares);
   else await supabase.from("fares").insert(payload);
   clearEdit("fares");
-  f.reset(); f.date.value = today;
+  f.reset(); f.date.value = weekRange(today).start;
   if (f.platform.options.length) f.platform.value = f.platform.options[0].value;
   f.platform_fee.value = 0;
   f.platform_fee_gst.value = "0.00";
+  if (f.tip_extra) f.tip_extra.value = 0;
+  if (f.net_payout) f.net_payout.value = "0.00";
   updateFareWeekFields();
   await refreshAll();
 }
@@ -669,7 +701,7 @@ async function onSaveTax(e) {
 }
 
 function renderAll() {
-  renderTripTable(); renderFareTable(); renderFareWeeklyTable(); renderExpenseTable(); renderTollTable(); renderKpis(); renderReport(); renderTaxBreakdown();
+  renderTripTable(); renderFareTable(); renderFareWeeklyTable(); renderExpenseTable(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
   updateAutoTaxPct();
 }
 
@@ -682,8 +714,8 @@ function renderTripTable() {
 }
 function renderFareTable() {
   el("fareTable").innerHTML = tableHtml(
-    ["Date", "Week", "Platform", "Gross", "Platform Fee", "Fee GST", "GST", "Actions"],
-    db.fares.map((x) => [x.date, esc(weekLabel(x.date)), esc(x.platform), aud(x.gross), aud(x.platform_fee || 0), aud(x.platform_fee_gst || 0), aud(gstFromFare(x)), actionBtns("fares", x.id)])
+    ["From", "To", "Platform", "Trip Fare", "Tip/Extra", "Net Payout", "GST", "Actions"],
+    db.fares.map((x) => [x.date, esc(x.week_end || addDays(x.date, 6)), esc(x.platform), aud(x.gross), aud(x.tip_extra || 0), aud(netPayoutForFare(x)), aud(gstFromFare(x)), actionBtns("fares", x.id)])
   );
   bindRowActions();
 }
@@ -691,9 +723,15 @@ function renderFareTable() {
 function renderFareWeeklyTable() {
   const rows = weeklyFareSummaries();
   el("fareWeeklyTable").innerHTML = tableHtml(
-    ["Week", "Gross", "Platform Fees", "Fee GST", "GST on Fares", "Net Before Tax"],
-    rows.map((x) => [esc(x.label), aud(x.gross), aud(x.platformFees), aud(x.platformFeeGst), aud(x.fareGst), aud(x.netBeforeTax)])
+    ["Week", "Trip Fare", "Tips", "Uber Fee", "GST on Fare", "Net Payout"],
+    rows.map((x) => [esc(x.label), aud(x.gross), aud(x.tipExtra), aud(x.platformFees), aud(x.fareGst), aud(x.netPayout)])
   );
+  if (el("dashboardWeeklyTable")) {
+    el("dashboardWeeklyTable").innerHTML = tableHtml(
+      ["Week", "Trip Fare", "Tips", "Net Payout", "GST Payable", "Tax Payable"],
+      rows.slice(0, 8).map((x) => [esc(x.label), aud(x.gross), aud(x.tipExtra), aud(x.netPayout), aud(x.gstPayableShare), aud(x.taxPayableShare)])
+    );
+  }
 }
 function renderExpenseTable() {
   el("expenseTable").innerHTML = tableHtml(
@@ -713,29 +751,42 @@ function renderTollTable() {
 function renderKpis() {
   const m = computeMetrics();
   const cards = [
-    ["Gross Fare Income", aud(m.fareGross)],
-    ["Other Income (Salary etc.)", aud(n(db.tax?.other_income || 0))],
-    ["Uber Tax Payable", aud(m.uberTaxPayable)],
-    ["PAYG Tax Already Paid", aud(m.otherIncomeTaxPaid)],
-    ["Platform Fees", aud(m.platformFees || 0)],
-    ["Total Expenses", aud(m.expenseTotal)],
-    ["GST Payable Estimate", aud(m.gstPayable)],
-    ["Business Use", pct(m.businessUsePct)],
-    ["Marginal Tax Slab", `${Math.round(m.marginalRate * 100)}%`],
-    ["Effective Tax %", pct(m.effectiveTaxRate)],
-    ["Income Tax + Medicare", aud(m.totalTax)],
-    ["In-Hand After Tax/Expense", aud(m.inHand)],
-    ["Monthly Avg Net", aud(m.monthlyAvgNet)],
-    ["Tax Reserve Recommended", aud(m.recommendedReserve)]
+    ["Trip Gross Fare", aud(m.fareGross), "kpi-tone-1"],
+    ["Tip / Extra", aud(m.tipExtra), "kpi-tone-2"],
+    ["Net Payout", aud(m.netPayout), "kpi-tone-3"],
+    ["GST Payable", aud(m.gstPayable), "kpi-tone-4"],
+    ["Uber Tax Payable", aud(m.uberTaxPayable), "kpi-tone-5"],
+    ["In Hand", aud(m.inHand), "kpi-tone-2"],
+    ["Expenses + Tolls", aud(m.expenseTotal + m.tollTotal), "kpi-tone-3"],
+    ["Tax Slab", m.slabLabel, "kpi-tone-4"]
   ];
-  el("kpiGrid").innerHTML = cards.map(([k, v]) => `<article class="kpi"><div class="key">${k}</div><div class="val">${v}</div></article>`).join("");
+  el("kpiGrid").innerHTML = cards.map(([k, v, tone]) => `<article class="kpi ${tone}"><div class="key">${k}</div><div class="val">${v}</div></article>`).join("");
+}
+
+function renderDashboardHero() {
+  const m = computeMetrics();
+  const week = weeklyFareSummaries()[0];
+  if (!el("dashboardHero")) return;
+  el("dashboardHero").innerHTML = `
+    <div class="eyebrow">Uber income overview</div>
+    <div class="hero-value">${aud(m.netPayout)}</div>
+    <div class="hero-sub">Estimated Uber money in after platform fees, GST, expenses, tolls and rideshare tax.</div>
+    <div class="hero-metrics">
+      <div class="hero-chip"><span>This Week</span><strong>${week ? aud(week.netPayout) : aud(0)}</strong></div>
+      <div class="hero-chip"><span>GST Payable</span><strong>${aud(m.gstPayable)}</strong></div>
+      <div class="hero-chip"><span>Uber Tax Payable</span><strong>${aud(m.uberTaxPayable)}</strong></div>
+      <div class="hero-chip"><span>Current Slab</span><strong>${esc(m.slabLabel)}</strong></div>
+    </div>
+  `;
 }
 
 function computeMetrics(overrides = {}) {
   const fareGross = sum(db.fares, "gross");
   const fareGst = db.fares.reduce((a, x) => a + gstFromFare(x), 0);
+  const tipExtra = db.fares.reduce((a, x) => a + n(x.tip_extra), 0);
   const platformFees = db.fares.reduce((a, x) => a + n(x.platform_fee), 0);
   const platformFeeGst = db.fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
+  const netPayout = db.fares.reduce((a, x) => a + netPayoutForFare(x), 0);
   const expenseTotal = sum(db.expenses, "amount");
   const expenseGstCredit = db.expenses.reduce((a, x) => a + (x.gst_claimable ? x.amount / 11 : 0), 0) + platformFeeGst;
   const tollTotal = sum(db.tolls, "amount");
@@ -750,7 +801,7 @@ function computeMetrics(overrides = {}) {
 
   const otherIncome = n(overrides.other_income ?? db.tax?.other_income ?? 0);
   const superContrib = n(overrides.super_contribution ?? db.tax?.super_contribution ?? 0);
-  const rideshareTaxableIncome = Math.max(0, fareGross - deductibleExpenses - deductibleTolls - superContrib);
+  const rideshareTaxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - deductibleTolls - superContrib);
   const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncome);
   const incomeTax = estimateTaxAu(taxableIncome);
   const medicare = taxableIncome * 0.02;
@@ -762,7 +813,7 @@ function computeMetrics(overrides = {}) {
   const slab = taxSlabForIncome(taxableIncome);
 
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
-  const inHand = fareGross - expenseTotal - platformFees - (tollTotal - reimbursedTolls) - uberTaxPayable - gstPayable;
+  const inHand = fareGross + tipExtra - expenseTotal - platformFees - (tollTotal - reimbursedTolls) - uberTaxPayable - gstPayable;
 
   const monthsActive = Math.max(1, distinctMonths([...db.fares, ...db.expenses, ...db.tolls].map((x) => x.date)).size);
   const monthlyAvgNet = inHand / monthsActive;
@@ -772,6 +823,7 @@ function computeMetrics(overrides = {}) {
   return {
     fareGross,
     fareGst,
+    tipExtra,
     expenseTotal,
     expenseGstCredit,
     tollTotal,
@@ -786,6 +838,7 @@ function computeMetrics(overrides = {}) {
     otherIncomeTaxPaid,
     gstPayable,
     inHand,
+    netPayout,
     monthlyAvgNet,
     recommendedReserve,
     effectiveTaxRate,
@@ -825,6 +878,7 @@ function renderReport(forceType = null) {
     <h3>Tax Summary (Estimate)</h3>
     <div class="report-grid">
       ${line("Taxable Income", aud(all.taxableIncome))}
+      ${line("Tip / Extra", aud(all.tipExtra))}
       ${line("Income Tax", aud(all.incomeTax))}
       ${line("Medicare Levy (2%)", aud(all.medicare))}
       ${line("Total Tax", aud(all.totalTax))}
@@ -866,12 +920,15 @@ function downloadReportWorkbook(reportType = "full") {
   const endDate = buckets[buckets.length - 1]?.to || `${year}-12-31`;
   const filterByRange = (rows) => rows.filter((row) => row.date >= startDate && row.date <= endDate);
   const fares = filterByRange(db.fares).map((row) => ({
-    Date: row.date,
+    From_Date: row.date,
+    To_Date: row.week_end || addDays(row.date, 6),
     Platform: row.platform,
-    Gross: round2(row.gross),
+    Trip_Gross_Fare: round2(row.gross),
     GST_On_Fare: round2(gstFromFare(row)),
     Platform_Fee: round2(row.platform_fee),
-    Platform_Fee_GST: round2(row.platform_fee_gst)
+    Platform_Fee_GST: round2(row.platform_fee_gst),
+    Tip_Extra: round2(row.tip_extra),
+    Net_Payout: round2(netPayoutForFare(row))
   }));
   const expenses = filterByRange(db.expenses).map((row) => ({
     Date: row.date,
@@ -905,7 +962,9 @@ function downloadReportWorkbook(reportType = "full") {
     { Field: "Range Start", Value: startDate },
     { Field: "Range End", Value: endDate },
     { Field: "Generated At", Value: new Date().toLocaleString("en-AU") },
-    { Field: "Gross Fare Income", Value: round2(allMetrics.fareGross) },
+    { Field: "Trip Gross Fare", Value: round2(allMetrics.fareGross) },
+    { Field: "Tip / Extra", Value: round2(allMetrics.tipExtra) },
+    { Field: "Net Payout", Value: round2(allMetrics.netPayout) },
     { Field: "Other Income", Value: round2(n(db.tax?.other_income || 0)) },
     { Field: "Platform Fees", Value: round2(allMetrics.platformFees || 0) },
     { Field: "Expenses", Value: round2(allMetrics.expenseTotal) },
@@ -965,6 +1024,7 @@ function computeForRange(from, to) {
 
   const fareGross = sum(fares, "gross");
   const fareGst = fares.reduce((a, x) => a + gstFromFare(x), 0);
+  const tipExtra = fares.reduce((a, x) => a + n(x.tip_extra), 0);
   const platformFees = fares.reduce((a, x) => a + n(x.platform_fee), 0);
   const platformFeeGst = fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
   const expenseTotal = sum(expenses, "amount");
@@ -978,14 +1038,14 @@ function computeForRange(from, to) {
 
   const deductibleExpenses = (expenseTotal + platformFees) * businessUsePct;
   const deductibleTolls = (tollTotal - reimbursedTolls) * businessUsePct;
-  const taxableIncome = Math.max(0, fareGross - deductibleExpenses - deductibleTolls + n(db.tax?.other_income || 0) - n(db.tax?.super_contribution || 0));
+  const taxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - deductibleTolls + n(db.tax?.other_income || 0) - n(db.tax?.super_contribution || 0));
   const incomeTax = estimateTaxAu(taxableIncome);
   const medicare = taxableIncome * 0.02;
   const totalTax = incomeTax + medicare;
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
-  const inHand = fareGross - expenseTotal - platformFees - (tollTotal - reimbursedTolls) - totalTax - gstPayable;
+  const inHand = fareGross + tipExtra - expenseTotal - platformFees - (tollTotal - reimbursedTolls) - totalTax - gstPayable;
 
-  return { fareGross, expenseTotal, fareGst, expenseGstCredit, gstPayable, taxableIncome, totalTax, inHand };
+  return { fareGross, tipExtra, expenseTotal, fareGst, expenseGstCredit, gstPayable, taxableIncome, totalTax, inHand };
 }
 
 function bucketizeByPeriod(period, year) {
@@ -1060,8 +1120,10 @@ function startEdit(table, id) {
     const f = el("fareForm"); editing.fares = id;
     f.date.value = r.date; f.platform.value = r.platform; f.gross.value = r.gross; f.gst_included.value = String(!!r.gst_included);
     f.platform_fee.value = r.platform_fee || 0; f.platform_fee_gst.value = (n(r.platform_fee) / 11).toFixed(2);
+    if (f.tip_extra) f.tip_extra.value = r.tip_extra || 0;
+    if (f.net_payout) f.net_payout.value = round2(netPayoutForFare(r)).toFixed(2);
     updateFareWeekFields();
-    setEditUI("fareSubmitBtn", "fareCancelEditBtn", true, "Update Fare");
+    setEditUI("fareSubmitBtn", "fareCancelEditBtn", true, "Update Weekly Income");
   }
   if (table === "expenses") {
     const r = db.expenses.find((x) => x.id === id); if (!r) return;
@@ -1079,7 +1141,7 @@ function startEdit(table, id) {
 
 function clearEdit(table) {
   if (table === "trips") { editing.trips = null; setEditUI("tripSubmitBtn", "tripCancelEditBtn", false, "Add Logbook Entry"); }
-  if (table === "fares") { editing.fares = null; setEditUI("fareSubmitBtn", "fareCancelEditBtn", false, "Add Fare"); updateFareWeekFields(); }
+  if (table === "fares") { editing.fares = null; setEditUI("fareSubmitBtn", "fareCancelEditBtn", false, "Add Weekly Income"); updateFareWeekFields(); }
   if (table === "expenses") { editing.expenses = null; setEditUI("expenseSubmitBtn", "expenseCancelEditBtn", false, "Add Expense"); }
   if (table === "tolls") { editing.tolls = null; setEditUI("tollSubmitBtn", "tollCancelEditBtn", false, "Add Toll"); }
 }
@@ -1088,44 +1150,6 @@ function setEditUI(submitId, cancelId, isEditing, submitLabel) {
   const s = el(submitId), c = el(cancelId);
   if (s) s.textContent = submitLabel;
   if (c) c.classList.toggle("hidden", !isEditing);
-}
-
-function onFabClick() {
-  const map = {
-    logbook: "tripForm",
-    income: "fareForm",
-    expenses: "expenseForm",
-    tolls: "tollForm",
-    tax: "taxForm"
-  };
-  if (activeTab === "reports") return renderReport();
-  if (activeTab === "dashboard") {
-    document.querySelector('.tab[data-tab="income"]')?.click();
-    return;
-  }
-  const id = map[activeTab];
-  const form = id ? el(id) : null;
-  if (!form) return;
-  form.scrollIntoView({ behavior: "smooth", block: "start" });
-  const first = form.querySelector("input,select,textarea");
-  if (first) setTimeout(() => first.focus(), 220);
-}
-
-function updateFab() {
-  const fab = el("fabBtn");
-  if (!fab) return;
-  const labels = {
-    dashboard: "+ Add Entry",
-    logbook: "+ Add Trip",
-    income: "+ Add Fare",
-    expenses: "+ Add Expense",
-    tolls: "+ Add Toll",
-    tax: "Save Tax",
-    reports: "Refresh",
-    settings: "Settings"
-  };
-  fab.textContent = labels[activeTab] || "+ Add";
-  fab.classList.toggle("hidden", !currentUser || activeTab === "settings");
 }
 
 function bindSwipeRows() {
@@ -1186,29 +1210,47 @@ function taxSlabForIncome(income) {
 function weeklyFareSummaries() {
   const map = new Map();
   db.fares.forEach((fare) => {
-    const week = weekRange(fare.date);
+    const week = { start: fare.date, end: fare.week_end || addDays(fare.date, 6) };
     const key = week.start;
     if (!map.has(key)) {
       map.set(key, {
         label: `${week.start} to ${week.end}`,
         start: week.start,
         gross: 0,
+        tipExtra: 0,
         platformFees: 0,
         platformFeeGst: 0,
         fareGst: 0,
-        netBeforeTax: 0
+        netPayout: 0,
+        gstPayableShare: 0,
+        taxPayableShare: 0
       });
     }
     const row = map.get(key);
     row.gross += n(fare.gross);
+    row.tipExtra += n(fare.tip_extra);
     row.platformFees += n(fare.platform_fee);
     row.platformFeeGst += n(fare.platform_fee_gst);
     row.fareGst += gstFromFare(fare);
-    row.netBeforeTax += n(fare.gross) - n(fare.platform_fee);
+    row.netPayout += netPayoutForFare(fare);
   });
+  const totals = computeMetrics();
   return Array.from(map.values())
     .sort((a, b) => b.start.localeCompare(a.start))
-    .map((x) => ({ ...x, gross: round2(x.gross), platformFees: round2(x.platformFees), platformFeeGst: round2(x.platformFeeGst), fareGst: round2(x.fareGst), netBeforeTax: round2(x.netBeforeTax) }));
+    .map((x) => {
+      const share = totals.netPayout > 0 ? x.netPayout / totals.netPayout : 0;
+      return {
+        ...x,
+        gross: round2(x.gross),
+        tipExtra: round2(x.tipExtra),
+        platformFees: round2(x.platformFees),
+        platformFeeGst: round2(x.platformFeeGst),
+        fareGst: round2(x.fareGst),
+        netPayout: round2(x.netPayout),
+        gstPayableShare: round2(totals.gstPayable * share),
+        taxPayableShare: round2(totals.uberTaxPayable * share)
+      };
+    });
 }
 
 function weekRange(dateStr) {
@@ -1251,6 +1293,7 @@ async function clearAllAccountData() {
 }
 
 function gstFromFare(x) { return x.gst_included ? n(x.gross) / 11 : n(x.gross) * 0.1; }
+function netPayoutForFare(x) { return round2(n(x.net_payout || (n(x.gross) + n(x.tip_extra) - n(x.platform_fee)))); }
 function estimateTaxAu(income) {
   let tax = 0, prev = 0;
   const brackets = [[18200, 0], [45000, 0.16], [135000, 0.30], [190000, 0.37], [Infinity, 0.45]];
@@ -1275,6 +1318,11 @@ function csvCell(v) { const s = String(v).replace(/"/g, '""'); return `"${s}"`; 
 function parseLocalDate(s) {
   const [y, m, d] = String(s || today).split("-").map(Number);
   return new Date(y, (m || 1) - 1, d || 1);
+}
+function addDays(dateStr, days) {
+  const d = parseLocalDate(dateStr);
+  d.setDate(d.getDate() + Number(days || 0));
+  return formatDateLocal(d);
 }
 function formatDateLocal(date) {
   const y = date.getFullYear();

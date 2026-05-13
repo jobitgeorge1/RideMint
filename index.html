@@ -22,7 +22,7 @@
       <div>
         <h1>RideMint Ledger Pro</h1>
         <p>Professional rideshare finance app for logbook, GST, BAS, and tax summaries.</p>
-        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-05-13a</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-05-13b</p>
       </div>
       <div class="hero-actions" id="topActions">
         <button id="printReportBtn" class="btn secondary hidden">Download Report</button>
@@ -96,7 +96,17 @@
         </nav>
 
         <section class="tab-panel" id="tab-dashboard">
-          <section class="kpi-grid" id="kpiGrid"></section>
+          <section class="dashboard-stack">
+            <article class="dashboard-hero" id="dashboardHero"></article>
+            <section class="priority-grid" id="kpiGrid"></section>
+            <article class="dashboard-detail-card">
+              <div class="section-head">
+                <h3>Weekly Uber Summary</h3>
+                <p>Your weekly driving numbers from Monday to Sunday.</p>
+              </div>
+              <table id="dashboardWeeklyTable"></table>
+            </article>
+          </section>
         </section>
 
       <section class="tab-panel hidden" id="tab-logbook">
@@ -122,23 +132,25 @@
         <article class="card">
           <h2>Fare Income</h2>
           <form id="fareForm" class="form-grid single">
-            <div><label>Date</label><input type="date" name="date" required /></div>
+            <div><label>From Date (Monday)</label><input type="date" name="date" required /></div>
             <div class="grid2 compact-grid">
               <div><label>Week Start</label><input type="text" id="fareWeekStart" readonly /></div>
-              <div><label>Week End</label><input type="text" id="fareWeekEnd" readonly /></div>
+              <div><label>To Date (Sunday)</label><input type="text" id="fareWeekEnd" readonly /></div>
             </div>
             <div><label>Platform</label><select name="platform" id="platformSelect"></select></div>
-            <div><label>Gross Fare (AUD)</label><input type="number" name="gross" step="0.01" min="0" required /></div>
+            <div><label>Trip Gross Fare (AUD)</label><input type="number" name="gross" step="0.01" min="0" required /></div>
             <div><label>GST Included</label><select name="gst_included"><option value="true">Yes</option><option value="false">No</option></select></div>
             <div><label>Platform Fee (AUD)</label><input type="number" name="platform_fee" step="0.01" min="0" value="0" /></div>
             <div><label>Platform Fee GST (AUD, auto)</label><input type="number" name="platform_fee_gst" id="platformFeeGst" step="0.01" min="0" value="0" readonly /></div>
-            <button class="btn full" id="fareSubmitBtn" type="submit">Add Fare</button>
+            <div><label>Tip / Extra (AUD)</label><input type="number" name="tip_extra" step="0.01" min="0" value="0" /></div>
+            <div><label>Net Payout (AUD, auto)</label><input type="number" name="net_payout" id="netPayout" step="0.01" min="0" value="0" readonly /></div>
+            <button class="btn full" id="fareSubmitBtn" type="submit">Add Weekly Income</button>
             <button class="btn secondary full hidden" id="fareCancelEditBtn" type="button">Cancel Edit</button>
           </form>
           <div class="section-block">
             <div class="section-head">
               <h3>Weekly Income Summary</h3>
-              <p>Monday to Sunday totals with GST and platform fee tracking.</p>
+              <p>Weekly Uber totals with gross fare, GST, tips, fees and payout.</p>
             </div>
             <table id="fareWeeklyTable"></table>
           </div>
@@ -210,7 +222,7 @@
         <article class="card">
           <h2>Admin Settings</h2>
           <h3 style="margin:10px 0 8px;">Import Existing Excel Tracker</h3>
-          <div class="small-note">Supported sheets: <strong>Uber Income & GST</strong>, <strong>Expenses & GST Credits</strong>, <strong>Logbook</strong>.</div>
+          <div class="small-note">Supported sheets: <strong>Uber Income & GST</strong>, <strong>Expenses & GST Credits</strong>, <strong>Logbook</strong>, <strong>Toll</strong>.</div>
           <div class="row">
             <input id="importWorkbookFile" type="file" accept=".xlsx,.xls" />
             <button id="importWorkbookBtn" class="btn" type="button">Import Workbook</button>
@@ -268,7 +280,6 @@
         </section>
       </main>
     </section>
-    <button id="fabBtn" class="fab hidden" type="button">+ Add</button>
   </div>
 
   <script src="./config.js"></script>
