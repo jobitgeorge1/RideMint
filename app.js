@@ -32,7 +32,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-13b (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-13c (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -755,10 +755,9 @@ function renderKpis() {
     ["Tip / Extra", aud(m.tipExtra), "kpi-tone-2"],
     ["Net Payout", aud(m.netPayout), "kpi-tone-3"],
     ["GST Payable", aud(m.gstPayable), "kpi-tone-4"],
-    ["Uber Tax Payable", aud(m.uberTaxPayable), "kpi-tone-5"],
+    ["Income Tax Payable", aud(m.uberTaxPayable), "kpi-tone-5"],
     ["In Hand", aud(m.inHand), "kpi-tone-2"],
-    ["Expenses + Tolls", aud(m.expenseTotal + m.tollTotal), "kpi-tone-3"],
-    ["Tax Slab", m.slabLabel, "kpi-tone-4"]
+    ["Expenses + Tolls", aud(m.expenseTotal + m.tollTotal), "kpi-tone-3"]
   ];
   el("kpiGrid").innerHTML = cards.map(([k, v, tone]) => `<article class="kpi ${tone}"><div class="key">${k}</div><div class="val">${v}</div></article>`).join("");
 }
@@ -774,8 +773,8 @@ function renderDashboardHero() {
     <div class="hero-metrics">
       <div class="hero-chip"><span>This Week</span><strong>${week ? aud(week.netPayout) : aud(0)}</strong></div>
       <div class="hero-chip"><span>GST Payable</span><strong>${aud(m.gstPayable)}</strong></div>
-      <div class="hero-chip"><span>Uber Tax Payable</span><strong>${aud(m.uberTaxPayable)}</strong></div>
-      <div class="hero-chip"><span>Current Slab</span><strong>${esc(m.slabLabel)}</strong></div>
+      <div class="hero-chip"><span>Income Tax Payable</span><strong>${aud(m.uberTaxPayable)}</strong></div>
+      <div class="hero-chip"><span>Expenses + Tolls</span><strong>${aud(m.expenseTotal + m.tollTotal)}</strong></div>
     </div>
   `;
 }
