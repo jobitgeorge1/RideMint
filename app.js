@@ -62,10 +62,10 @@ function wireEvents() {
   bindSubmit("taxForm", onSaveTax);
 
   bindClick("refreshSummaryBtn", renderReport);
-  bindClick("printBasBtn", () => renderReport("bas"));
-  bindClick("printTaxBtn", () => renderReport("tax"));
-  bindClick("printReportBtn", () => window.print());
-  bindClick("printReportBtn2", () => window.print());
+  bindClick("printBasBtn", () => downloadReportWorkbook("bas"));
+  bindClick("printTaxBtn", () => downloadReportWorkbook("tax"));
+  bindClick("printReportBtn", () => downloadReportWorkbook("full"));
+  bindClick("printReportBtn2", () => downloadReportWorkbook("full"));
   bindClick("exportLogbookCsvBtn", exportLogbookCsv);
   bindClick("saveAdminRoleBtn", updateUserRole);
   bindClick("refreshAdminsBtn", loadAdminUsers);
@@ -766,7 +766,116 @@ function renderReport(forceType = null) {
   if (type === "combined") html += basSection + taxSection + atoLogbookDeclaration();
 
   el("reportArea").innerHTML = html;
-  if (forceType) window.print();
+}
+
+function downloadReportWorkbook(reportType = "full") {
+  if (!window.XLSX) return;
+  const period = el("summaryPeriod").value;
+  const year = Number(el("summaryYear").value || new Date().getFullYear());
+  const buckets = bucketizeByPeriod(period, year);
+  const reportRows = buckets.map((bucket) => {
+    const metrics = computeForRange(bucket.from, bucket.to);
+    return {
+      Period: bucket.label,
+      Fare: round2(metrics.fareGross),
+      Expenses: round2(metrics.expenseTotal),
+      GST_Collected: round2(metrics.fareGst),
+      GST_Credits: round2(metrics.expenseGstCredit),
+      GST_Payable: round2(metrics.gstPayable),
+      Taxable_Income: round2(metrics.taxableIncome),
+      Tax_Medicare: round2(metrics.totalTax),
+      In_Hand: round2(metrics.inHand)
+    };
+  });
+
+  const startDate = buckets[0]?.from || `${year}-01-01`;
+  const endDate = buckets[buckets.length - 1]?.to || `${year}-12-31`;
+  const filterByRange = (rows) => rows.filter((row) => row.date >= startDate && row.date <= endDate);
+  const fares = filterByRange(db.fares).map((row) => ({
+    Date: row.date,
+    Platform: row.platform,
+    Gross: round2(row.gross),
+    GST_On_Fare: round2(gstFromFare(row)),
+    Platform_Fee: round2(row.platform_fee),
+    Platform_Fee_GST: round2(row.platform_fee_gst)
+  }));
+  const expenses = filterByRange(db.expenses).map((row) => ({
+    Date: row.date,
+    Category: row.category,
+    Amount: round2(row.amount),
+    GST_Claimable: row.gst_claimable ? "Yes" : "No",
+    GST_Credit: round2(row.gst_claimable ? row.amount / 11 : 0),
+    Notes: row.notes || ""
+  }));
+  const tolls = filterByRange(db.tolls).map((row) => ({
+    Date: row.date,
+    Amount: round2(row.amount),
+    Reimbursed: row.reimbursed ? "Yes" : "No"
+  }));
+  const trips = filterByRange(db.trips).map((row) => ({
+    Date: row.date,
+    Purpose: row.purpose,
+    Odo_Start: round2(row.odo_start),
+    Odo_End: round2(row.odo_end),
+    KM: round2(row.km),
+    From: row.from_location || "",
+    To: row.to_location || "",
+    Notes: row.notes || ""
+  }));
+
+  const allMetrics = computeMetrics();
+  const overviewRows = [
+    { Field: "Report Type", Value: reportType.toUpperCase() },
+    { Field: "Summary Period", Value: cap(period) },
+    { Field: "Year", Value: year },
+    { Field: "Range Start", Value: startDate },
+    { Field: "Range End", Value: endDate },
+    { Field: "Generated At", Value: new Date().toLocaleString("en-AU") },
+    { Field: "Gross Fare Income", Value: round2(allMetrics.fareGross) },
+    { Field: "Other Income", Value: round2(n(db.tax?.other_income || 0)) },
+    { Field: "Platform Fees", Value: round2(allMetrics.platformFees || 0) },
+    { Field: "Expenses", Value: round2(allMetrics.expenseTotal) },
+    { Field: "GST Payable", Value: round2(allMetrics.gstPayable) },
+    { Field: "Taxable Income", Value: round2(allMetrics.taxableIncome) },
+    { Field: "Tax + Medicare", Value: round2(allMetrics.totalTax) },
+    { Field: "Effective Tax %", Value: round2(allMetrics.effectiveTaxRate * 100) },
+    { Field: "In Hand", Value: round2(allMetrics.inHand) }
+  ];
+  const basRows = [{
+    G1_Total_Sales: round2(allMetrics.fareGross),
+    GST_on_Sales_1A: round2(allMetrics.fareGst),
+    GST_Credits_1B: round2(allMetrics.expenseGstCredit),
+    Net_GST_Payable: round2(allMetrics.gstPayable)
+  }];
+  const taxRows = [{
+    Other_Income: round2(n(db.tax?.other_income || 0)),
+    Super_Contribution: round2(n(db.tax?.super_contribution || 0)),
+    Taxable_Income: round2(allMetrics.taxableIncome),
+    Income_Tax: round2(allMetrics.incomeTax),
+    Medicare: round2(allMetrics.medicare),
+    Total_Tax: round2(allMetrics.totalTax),
+    Effective_Tax_Pct: round2(allMetrics.effectiveTaxRate * 100),
+    In_Hand: round2(allMetrics.inHand)
+  }];
+
+  const workbook = window.XLSX.utils.book_new();
+  appendSheet(workbook, "Overview", overviewRows);
+  appendSheet(workbook, "Period Summary", reportRows);
+  appendSheet(workbook, "BAS Summary", basRows);
+  appendSheet(workbook, "Tax Summary", taxRows);
+  appendSheet(workbook, "Fares", fares);
+  appendSheet(workbook, "Expenses", expenses);
+  appendSheet(workbook, "Tolls", tolls);
+  appendSheet(workbook, "Logbook", trips);
+
+  const suffix = reportType === "bas" ? "bas-report" : reportType === "tax" ? "tax-report" : "full-report";
+  window.XLSX.writeFile(workbook, `ridemint-${suffix}-${year}.xlsx`);
+}
+
+function appendSheet(workbook, name, rows) {
+  const safeRows = rows.length ? rows : [{ Message: "No data for selected report period." }];
+  const sheet = window.XLSX.utils.json_to_sheet(safeRows);
+  window.XLSX.utils.book_append_sheet(workbook, sheet, name);
 }
 
 function computeForRange(from, to) {
@@ -966,6 +1075,7 @@ function estimateTaxAu(income) {
 function distinctMonths(dates) { return new Set(dates.filter(Boolean).map((d) => d.slice(0, 7))); }
 function setStatus(id, msg, isErr = false) { const e = el(id); e.textContent = msg; e.style.color = isErr ? "#b91c1c" : "#0f5132"; }
 function n(v) { return Number(v || 0); }
+function round2(v) { return Number(n(v).toFixed(2)); }
 function sum(arr, k) { return arr.reduce((a, x) => a + n(x[k]), 0); }
 function f2(v) { return n(v).toFixed(2); }
 function aud(v) { return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n(v)); }
