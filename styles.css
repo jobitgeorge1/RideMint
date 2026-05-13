@@ -38,6 +38,48 @@ input, select { width: 100%; border: 1px solid var(--line); border-radius: 10px;
 .hidden { display: none !important; }
 .link-btn { background: transparent; border: 0; color: #0f6ac5; cursor: pointer; font-weight: 700; padding: 0; }
 .small-note { color: var(--muted); font-size: 0.88rem; }
+.section-block { margin-top: 14px; }
+.section-head h3 { margin: 0; font-size: 0.95rem; }
+.section-head p { margin: 4px 0 0; color: var(--muted); font-size: 0.82rem; }
+.compact-grid { gap: 8px; }
+.tax-breakdown {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+.tax-panel {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #f8fbfe;
+}
+.tax-panel strong {
+  display: block;
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+}
+.tax-panel .meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-bottom: 8px;
+}
+.danger-zone {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+.checkline {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+.checkline input {
+  width: 18px;
+  min-height: 18px;
+  margin-top: 3px;
+}
 .auth-pages { max-width: 520px; margin: 0 auto; }
 .auth-card { margin-top: 14px; }
 
