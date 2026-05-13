@@ -22,7 +22,7 @@
       <div>
         <h1>RideMint Ledger Pro</h1>
         <p>Professional rideshare finance app for logbook, GST, BAS, and tax summaries.</p>
-        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-05-13c</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-05-13d</p>
       </div>
       <div class="hero-actions" id="topActions">
         <button id="printReportBtn" class="btn secondary hidden">Download Report</button>
@@ -32,6 +32,7 @@
 
     <section id="authPages" class="auth-pages">
       <article class="card auth-card" id="loginPage">
+        <div class="auth-mark">Driver Sign In</div>
         <h2>Login</h2>
         <div class="form-grid single">
           <div><label>Email</label><input id="loginEmail" type="email" placeholder="driver@email.com" /></div>
@@ -42,6 +43,7 @@
       </article>
 
       <article class="card auth-card hidden" id="signupPage">
+        <div class="auth-mark">Create Driver Account</div>
         <h2>Create Account</h2>
         <div class="form-grid single">
           <div><label>Full Name</label><input id="signupFullName" type="text" placeholder="Driver full name" /></div>
@@ -131,6 +133,7 @@
       <section class="tab-panel hidden" id="tab-income">
         <article class="card">
           <h2>Fare Income</h2>
+          <p class="small-note">Only weekly entries are used here. Each record is one Monday to Sunday period.</p>
           <form id="fareForm" class="form-grid single">
             <div><label>From Date (Monday)</label><input type="date" name="date" required /></div>
             <div class="grid2 compact-grid">
@@ -149,12 +152,11 @@
           </form>
           <div class="section-block">
             <div class="section-head">
-              <h3>Weekly Income Summary</h3>
-              <p>Weekly Uber totals with gross fare, GST, tips, fees and payout.</p>
+              <h3>Weekly Income Entries</h3>
+              <p>Each row is a full week entry with edit and delete actions.</p>
             </div>
             <table id="fareWeeklyTable"></table>
           </div>
-          <table id="fareTable"></table>
         </article>
       </section>
 

@@ -32,7 +32,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-13c (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-13d (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -701,7 +701,7 @@ async function onSaveTax(e) {
 }
 
 function renderAll() {
-  renderTripTable(); renderFareTable(); renderFareWeeklyTable(); renderExpenseTable(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
+  renderTripTable(); renderFareWeeklyTable(); renderExpenseTable(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
   updateAutoTaxPct();
 }
 
@@ -712,19 +712,20 @@ function renderTripTable() {
   );
   bindRowActions();
 }
-function renderFareTable() {
-  el("fareTable").innerHTML = tableHtml(
-    ["From", "To", "Platform", "Trip Fare", "Tip/Extra", "Net Payout", "GST", "Actions"],
-    db.fares.map((x) => [x.date, esc(x.week_end || addDays(x.date, 6)), esc(x.platform), aud(x.gross), aud(x.tip_extra || 0), aud(netPayoutForFare(x)), aud(gstFromFare(x)), actionBtns("fares", x.id)])
-  );
-  bindRowActions();
-}
-
 function renderFareWeeklyTable() {
   const rows = weeklyFareSummaries();
   el("fareWeeklyTable").innerHTML = tableHtml(
-    ["Week", "Trip Fare", "Tips", "Uber Fee", "GST on Fare", "Net Payout"],
-    rows.map((x) => [esc(x.label), aud(x.gross), aud(x.tipExtra), aud(x.platformFees), aud(x.fareGst), aud(x.netPayout)])
+    ["From", "To", "Trip Fare", "Tips", "Uber Fee", "Net Payout", "GST", "Actions"],
+    rows.map((x) => [
+      x.start,
+      x.end,
+      aud(x.gross),
+      aud(x.tipExtra),
+      aud(x.platformFees),
+      aud(x.netPayout),
+      aud(x.fareGst),
+      actionBtns("fares", x.id)
+    ])
   );
   if (el("dashboardWeeklyTable")) {
     el("dashboardWeeklyTable").innerHTML = tableHtml(
@@ -1254,45 +1255,24 @@ function allocateAnnualValueToRange(total, from, to) {
 }
 
 function weeklyFareSummaries() {
-  const map = new Map();
-  db.fares.forEach((fare) => {
-    const week = { start: fare.date, end: fare.week_end || addDays(fare.date, 6) };
-    const key = week.start;
-    if (!map.has(key)) {
-      map.set(key, {
-        label: `${week.start} to ${week.end}`,
-        start: week.start,
-        gross: 0,
-        tipExtra: 0,
-        platformFees: 0,
-        platformFeeGst: 0,
-        fareGst: 0,
-        netPayout: 0,
-        gstPayableShare: 0,
-        taxPayableShare: 0
-      });
-    }
-    const row = map.get(key);
-    row.gross += n(fare.gross);
-    row.tipExtra += n(fare.tip_extra);
-    row.platformFees += n(fare.platform_fee);
-    row.platformFeeGst += n(fare.platform_fee_gst);
-    row.fareGst += gstFromFare(fare);
-    row.netPayout += netPayoutForFare(fare);
-  });
   const totals = computeMetrics();
-  return Array.from(map.values())
-    .sort((a, b) => b.start.localeCompare(a.start))
-    .map((x) => {
-      const share = totals.netPayout > 0 ? x.netPayout / totals.netPayout : 0;
+  return db.fares
+    .slice()
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    .map((fare) => {
+      const netPayout = netPayoutForFare(fare);
+      const share = totals.netPayout > 0 ? netPayout / totals.netPayout : 0;
       return {
-        ...x,
-        gross: round2(x.gross),
-        tipExtra: round2(x.tipExtra),
-        platformFees: round2(x.platformFees),
-        platformFeeGst: round2(x.platformFeeGst),
-        fareGst: round2(x.fareGst),
-        netPayout: round2(x.netPayout),
+        id: fare.id,
+        label: `${fare.date} to ${fare.week_end || addDays(fare.date, 6)}`,
+        start: fare.date,
+        end: fare.week_end || addDays(fare.date, 6),
+        gross: round2(fare.gross),
+        tipExtra: round2(fare.tip_extra),
+        platformFees: round2(fare.platform_fee),
+        platformFeeGst: round2(fare.platform_fee_gst),
+        fareGst: round2(gstFromFare(fare)),
+        netPayout: round2(netPayout),
         gstPayableShare: round2(totals.gstPayable * share),
         taxPayableShare: round2(totals.uberTaxPayable * share)
       };
