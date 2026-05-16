@@ -754,11 +754,12 @@ function renderKpis() {
   const cards = [
     ["Trip Gross Fare", aud(m.fareGross), "kpi-tone-1"],
     ["Tip / Extra", aud(m.tipExtra), "kpi-tone-2"],
+    ["Tolls Tracked", aud(m.tollTotal), "kpi-tone-4"],
     ["Net Payout", aud(m.netPayout), "kpi-tone-3"],
     ["GST Payable", aud(m.gstPayable), "kpi-tone-4"],
     ["Income Tax Payable", aud(m.uberTaxPayable), "kpi-tone-5"],
     ["In Hand", aud(m.inHand), "kpi-tone-2"],
-    ["Expenses + Tolls", aud(m.expenseTotal + m.tollTotal), "kpi-tone-3"]
+    ["Expenses", aud(m.expenseTotal), "kpi-tone-3"]
   ];
   el("kpiGrid").innerHTML = cards.map(([k, v, tone]) => `<article class="kpi ${tone}"><div class="key">${k}</div><div class="val">${v}</div></article>`).join("");
 }
@@ -770,12 +771,12 @@ function renderDashboardHero() {
   el("dashboardHero").innerHTML = `
     <div class="eyebrow">Uber income overview</div>
     <div class="hero-value">${aud(m.netPayout)}</div>
-    <div class="hero-sub">Estimated Uber money in after platform fees, GST, expenses, tolls and rideshare tax.</div>
+    <div class="hero-sub">Estimated Uber money in after platform fees, GST, expenses and rideshare income tax. Tolls are tracked separately.</div>
     <div class="hero-metrics">
       <div class="hero-chip"><span>This Week</span><strong>${week ? aud(week.netPayout) : aud(0)}</strong></div>
       <div class="hero-chip"><span>GST Payable</span><strong>${aud(m.gstPayable)}</strong></div>
       <div class="hero-chip"><span>Income Tax Payable</span><strong>${aud(m.uberTaxPayable)}</strong></div>
-      <div class="hero-chip"><span>Expenses + Tolls</span><strong>${aud(m.expenseTotal + m.tollTotal)}</strong></div>
+      <div class="hero-chip"><span>Tolls Tracked</span><strong>${aud(m.tollTotal)}</strong></div>
     </div>
   `;
 }
@@ -797,11 +798,10 @@ function computeMetrics(overrides = {}) {
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
 
   const deductibleExpenses = (expenseTotal + platformFees) * businessUsePct;
-  const deductibleTolls = (tollTotal - reimbursedTolls) * businessUsePct;
 
   const otherIncome = n(overrides.other_income ?? db.tax?.other_income ?? 0);
   const superContrib = n(overrides.super_contribution ?? db.tax?.super_contribution ?? 0);
-  const rideshareTaxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - deductibleTolls - superContrib);
+  const rideshareTaxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - superContrib);
   const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncome);
   const taxBreakdown = computeTaxBreakdown(rideshareTaxableIncome, otherIncome);
   const incomeTax = taxBreakdown.incomeTax;
@@ -812,7 +812,7 @@ function computeMetrics(overrides = {}) {
   const slab = taxSlabForIncome(taxableIncome);
 
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
-  const inHand = fareGross + tipExtra - expenseTotal - platformFees - (tollTotal - reimbursedTolls) - uberTaxPayable - gstPayable;
+  const inHand = fareGross + tipExtra - expenseTotal - platformFees - uberTaxPayable - gstPayable;
 
   const monthsActive = Math.max(1, distinctMonths([...db.fares, ...db.expenses, ...db.tolls].map((x) => x.date)).size);
   const monthlyAvgNet = inHand / monthsActive;
@@ -1041,17 +1041,16 @@ function computeForRange(from, to) {
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
 
   const deductibleExpenses = (expenseTotal + platformFees) * businessUsePct;
-  const deductibleTolls = (tollTotal - reimbursedTolls) * businessUsePct;
   const otherIncomeAllocated = allocateAnnualValueToRange(n(db.tax?.other_income || 0), from, to);
   const superAllocated = allocateAnnualValueToRange(n(db.tax?.super_contribution || 0), from, to);
-  const rideshareTaxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - deductibleTolls - superAllocated);
+  const rideshareTaxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - superAllocated);
   const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncomeAllocated);
   const taxBreakdown = computeTaxBreakdown(rideshareTaxableIncome, otherIncomeAllocated);
   const incomeTax = taxBreakdown.incomeTax;
   const medicare = taxBreakdown.medicare;
   const totalTax = taxBreakdown.totalTax;
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
-  const inHand = fareGross + tipExtra - expenseTotal - platformFees - (tollTotal - reimbursedTolls) - taxBreakdown.uberTaxPayable - gstPayable;
+  const inHand = fareGross + tipExtra - expenseTotal - platformFees - taxBreakdown.uberTaxPayable - gstPayable;
 
   return {
     fareGross,
