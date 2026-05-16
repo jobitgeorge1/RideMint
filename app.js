@@ -708,7 +708,7 @@ async function onAddExpense(e) {
     amount: n(f.amount.value),
     gst_amount: n(f.gst_amount.value),
     gst_claimable: f.gst_claimable.value === "true",
-    gst_credit: f.gst_claimable.value === "true" ? n(f.gst_credit.value) : 0,
+    gst_credit: f.gst_claimable.value === "true" ? (n(f.gst_credit.value) || n(f.gst_amount.value)) : 0,
     notes: f.notes.value
   };
   if (editing.expenses) await supabase.from("expenses").update(payload).eq("id", editing.expenses);
@@ -791,7 +791,7 @@ function renderFareWeeklyTable() {
 function renderExpenseTable() {
   el("expenseTable").innerHTML = tableHtml(
     ["Date", "Category", "Amount", "GST Credit", "Actions"],
-    db.expenses.map((x) => [x.date, esc(x.category), aud(x.amount), aud(x.gst_credit || 0), actionBtns("expenses", x.id)])
+    db.expenses.map((x) => [x.date, esc(x.category), aud(x.amount), aud(expenseGstCreditValue(x)), actionBtns("expenses", x.id)])
   );
   bindRowActions();
 }
@@ -857,7 +857,7 @@ function computeMetrics(overrides = {}) {
   const platformFeeGst = db.fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
   const netPayout = db.fares.reduce((a, x) => a + netPayoutForFare(x), 0);
   const expenseTotal = sum(db.expenses, "amount");
-  const expenseGstCredit = db.expenses.reduce((a, x) => a + n(x.gst_claimable ? x.gst_credit : 0), 0) + platformFeeGst;
+  const expenseGstCredit = db.expenses.reduce((a, x) => a + expenseGstCreditValue(x), 0) + platformFeeGst;
   const tollTotal = sum(db.tolls, "amount");
   const reimbursedTolls = db.tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
 
@@ -1008,7 +1008,7 @@ function downloadReportWorkbook(reportType = "full") {
     Amount: round2(row.amount),
     GST_Claimable: row.gst_claimable ? "Yes" : "No",
     GST_Amount: round2(row.gst_amount || 0),
-    GST_Credit: round2(row.gst_credit || 0),
+    GST_Credit: round2(expenseGstCreditValue(row)),
     Notes: row.notes || ""
   }));
   const tolls = filterByRange(db.tolls).map((row) => ({
@@ -1090,6 +1090,14 @@ function appendSheet(workbook, name, rows) {
   window.XLSX.utils.book_append_sheet(workbook, sheet, name);
 }
 
+function expenseGstCreditValue(row) {
+  if (!row?.gst_claimable) return 0;
+  const explicitCredit = n(row.gst_credit);
+  if (explicitCredit > 0) return explicitCredit;
+  const gstAmount = n(row.gst_amount);
+  return gstAmount > 0 ? gstAmount : 0;
+}
+
 function computeForRange(from, to) {
   const inRange = (d) => d >= from && d <= to;
   const fares = db.fares.filter((x) => inRange(x.date));
@@ -1103,7 +1111,7 @@ function computeForRange(from, to) {
   const platformFees = fares.reduce((a, x) => a + n(x.platform_fee), 0);
   const platformFeeGst = fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
   const expenseTotal = sum(expenses, "amount");
-  const expenseGstCredit = expenses.reduce((a, x) => a + n(x.gst_claimable ? x.gst_credit : 0), 0) + platformFeeGst;
+  const expenseGstCredit = expenses.reduce((a, x) => a + expenseGstCreditValue(x), 0) + platformFeeGst;
   const tollTotal = sum(tolls, "amount");
   const reimbursedTolls = tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
 
@@ -1221,7 +1229,7 @@ function startEdit(table, id) {
   if (table === "expenses") {
     const r = db.expenses.find((x) => x.id === id); if (!r) return;
     const f = el("expenseForm"); editing.expenses = id;
-    f.date.value = r.date; f.category.value = r.category; f.amount.value = r.amount; if (f.gst_amount) f.gst_amount.value = round2(r.gst_amount || 0).toFixed(2); f.gst_claimable.value = String(!!r.gst_claimable); if (f.gst_credit) f.gst_credit.value = round2(r.gst_credit || 0).toFixed(2); f.notes.value = r.notes || "";
+    f.date.value = r.date; f.category.value = r.category; f.amount.value = r.amount; if (f.gst_amount) f.gst_amount.value = round2(r.gst_amount || 0).toFixed(2); f.gst_claimable.value = String(!!r.gst_claimable); if (f.gst_credit) f.gst_credit.value = round2(expenseGstCreditValue(r)).toFixed(2); f.notes.value = r.notes || "";
     setEditUI("expenseSubmitBtn", "expenseCancelEditBtn", true, "Update Expense");
   }
   if (table === "tolls") {
