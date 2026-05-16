@@ -480,33 +480,59 @@ async function importWorkbook() {
     const logbookRows = parseLogbookSheet(wb);
     const tollRows = parseTollSheet(wb);
 
-    let insertedIncome = 0, insertedExpense = 0, insertedLogbook = 0, insertedTolls = 0;
-    if (incomeRows.length) {
-      const { error } = await supabase.from("fares").insert(incomeRows);
-      if (error) throw new Error(`Income import failed: ${error.message}`);
-      insertedIncome = incomeRows.length;
-    }
-    if (expenseRows.length) {
-      const { error } = await supabase.from("expenses").insert(expenseRows);
-      if (error) throw new Error(`Expenses import failed: ${error.message}`);
-      insertedExpense = expenseRows.length;
-    }
-    if (logbookRows.length) {
-      const { error } = await supabase.from("trips").insert(logbookRows);
-      if (error) throw new Error(`Logbook import failed: ${error.message}`);
-      insertedLogbook = logbookRows.length;
-    }
-    if (tollRows.length) {
-      const { error } = await supabase.from("tolls").insert(tollRows);
-      if (error) throw new Error(`Toll import failed: ${error.message}`);
-      insertedTolls = tollRows.length;
-    }
+    const incomeResult = incomeRows.length ? await mergeRows("fares", incomeRows, fareImportKey) : { inserted: 0, updated: 0 };
+    const expenseResult = expenseRows.length ? await mergeRows("expenses", expenseRows, expenseImportKey) : { inserted: 0, updated: 0 };
+    const logbookResult = logbookRows.length ? await mergeRows("trips", logbookRows, tripImportKey) : { inserted: 0, updated: 0 };
+    const tollResult = tollRows.length ? await mergeRows("tolls", tollRows, tollImportKey) : { inserted: 0, updated: 0 };
     await refreshAll();
-    setStatus("importStatus", `Imported successfully. Income: ${insertedIncome}, Expenses: ${insertedExpense}, Logbook: ${insertedLogbook}, Tolls: ${insertedTolls}.`);
+    setStatus(
+      "importStatus",
+      `Import synced. Income: +${incomeResult.inserted} / updated ${incomeResult.updated}, Expenses: +${expenseResult.inserted} / updated ${expenseResult.updated}, Logbook: +${logbookResult.inserted} / updated ${logbookResult.updated}, Tolls: +${tollResult.inserted} / updated ${tollResult.updated}.`
+    );
   } catch (err) {
     setStatus("importStatus", err?.message || "Import failed.", true);
   }
 }
+
+async function mergeRows(table, rows, keyFn) {
+  const { data: existing, error } = await supabase.from(table).select("*");
+  if (error) throw new Error(`${cap(table)} lookup failed: ${error.message}`);
+  const existingMap = new Map((existing || []).map((row) => [keyFn(row), row]));
+  let inserted = 0;
+  let updated = 0;
+  for (const row of rows) {
+    const key = keyFn(row);
+    const match = existingMap.get(key);
+    if (!match) {
+      const { error: insertError } = await supabase.from(table).insert(row);
+      if (insertError) throw new Error(`${cap(table)} import failed: ${insertError.message}`);
+      inserted += 1;
+      continue;
+    }
+    const payload = changedPayload(match, row);
+    if (Object.keys(payload).length) {
+      const { error: updateError } = await supabase.from(table).update(payload).eq("id", match.id);
+      if (updateError) throw new Error(`${cap(table)} update failed: ${updateError.message}`);
+      updated += 1;
+    }
+  }
+  return { inserted, updated };
+}
+
+function changedPayload(existing, incoming) {
+  const payload = {};
+  Object.entries(incoming).forEach(([key, value]) => {
+    if (key === "user_id") return;
+    const current = existing[key];
+    if (String(current ?? "") !== String(value ?? "")) payload[key] = value;
+  });
+  return payload;
+}
+
+function fareImportKey(row) { return [row.user_id, row.date, row.week_end, row.platform].join("|"); }
+function expenseImportKey(row) { return [row.user_id, row.date, row.category, round2(row.amount)].join("|"); }
+function tripImportKey(row) { return [row.user_id, row.date, round2(row.odo_start), round2(row.odo_end)].join("|"); }
+function tollImportKey(row) { return [row.user_id, row.date, round2(row.amount)].join("|"); }
 
 function parseIncomeSheet(wb) {
   const ws = wb.Sheets["Uber Income & GST"];
@@ -1191,6 +1217,13 @@ function renderTaxBreakdown() {
   const m = computeMetrics(readDraftTaxValues());
   const otherIncome = n(readDraftTaxValues().other_income);
   const html = `
+    <div class="tax-panel">
+      <strong>GST Position</strong>
+      <div class="meta">GST collected from fares versus GST credits from expenses and platform fees.</div>
+      ${line("GST on Sales (1A)", aud(m.fareGst))}
+      ${line("GST Credits (1B)", aud(m.expenseGstCredit))}
+      ${line("GST Total Payable", aud(m.gstPayable))}
+    </div>
     <div class="tax-panel">
       <strong>Rideshare Tax Payable</strong>
       <div class="meta">Tax still payable from Uber and rideshare activity after excluding PAYG salary tax already withheld.</div>
