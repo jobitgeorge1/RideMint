@@ -32,7 +32,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-16a (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-16b (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -81,6 +81,7 @@ function wireEvents() {
   bindFareFeeAutoCalc();
   bindFareWeekFields();
   bindTaxLivePreview();
+  bindExpenseGstCalc();
 }
 
 function bindFareFeeAutoCalc() {
@@ -115,6 +116,27 @@ function bindTaxLivePreview() {
       renderTaxBreakdown();
     });
   });
+}
+
+function bindExpenseGstCalc() {
+  const form = el("expenseForm");
+  if (!form?.amount) return;
+  const recalc = () => {
+    const gstAmount = n(form.gst_amount?.value);
+    const claimable = form.gst_claimable?.value === "true";
+    if (form.gst_credit) form.gst_credit.value = claimable ? round2(gstAmount).toFixed(2) : "0.00";
+  };
+  form.amount.addEventListener("input", () => {
+    if (!form.gst_amount.dataset.manual) form.gst_amount.value = round2(n(form.amount.value) / 11).toFixed(2);
+    recalc();
+  });
+  form.gst_amount?.addEventListener("input", () => {
+    form.gst_amount.dataset.manual = "true";
+    recalc();
+  });
+  form.gst_claimable?.addEventListener("change", recalc);
+  form.gst_amount.value = round2(n(form.amount.value) / 11).toFixed(2);
+  recalc();
 }
 
 function saveConfigFromAdmin() {
@@ -566,7 +588,9 @@ function parseExpenseSheet(wb) {
         date: normalizeExcelDate(r["Date"]),
         category: String(r["Expense Type"] || "Other"),
         amount: n(r["Total Amount"]),
-        gst_claimable: n(r["GST Amount"]) > 0 || n(r["GST Claimable"]) > 0,
+        gst_amount: n(r["GST Amount"]),
+        gst_claimable: n(r["GST Claimable"]) > 0,
+        gst_credit: n(r["GST Claimable"]),
         notes
       };
     })
@@ -682,13 +706,17 @@ async function onAddExpense(e) {
     date: f.date.value,
     category: f.category.value,
     amount: n(f.amount.value),
+    gst_amount: n(f.gst_amount.value),
     gst_claimable: f.gst_claimable.value === "true",
+    gst_credit: f.gst_claimable.value === "true" ? n(f.gst_credit.value) : 0,
     notes: f.notes.value
   };
   if (editing.expenses) await supabase.from("expenses").update(payload).eq("id", editing.expenses);
   else await supabase.from("expenses").insert(payload);
   clearEdit("expenses");
   f.reset(); f.date.value = today;
+  if (f.gst_amount) { f.gst_amount.dataset.manual = ""; f.gst_amount.value = "0.00"; }
+  if (f.gst_credit) f.gst_credit.value = "0.00";
   await refreshAll();
 }
 
@@ -727,7 +755,7 @@ async function onSaveTax(e) {
 }
 
 function renderAll() {
-  renderTripTable(); renderFareWeeklyTable(); renderExpenseTable(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
+  renderTripTable(); renderLogbookSummary(); renderFareWeeklyTable(); renderExpenseTable(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
   updateAutoTaxPct();
 }
 
@@ -763,7 +791,7 @@ function renderFareWeeklyTable() {
 function renderExpenseTable() {
   el("expenseTable").innerHTML = tableHtml(
     ["Date", "Category", "Amount", "GST Credit", "Actions"],
-    db.expenses.map((x) => [x.date, esc(x.category), aud(x.amount), aud(x.gst_claimable ? x.amount / 11 : 0), actionBtns("expenses", x.id)])
+    db.expenses.map((x) => [x.date, esc(x.category), aud(x.amount), aud(x.gst_credit || 0), actionBtns("expenses", x.id)])
   );
   bindRowActions();
 }
@@ -779,6 +807,7 @@ function renderKpis() {
   const m = computeMetrics();
   const cards = [
     ["Trip Gross Fare", aud(m.fareGross), "kpi-tone-1"],
+    ["Uber Trip KM", f2(m.businessKm), "kpi-tone-2"],
     ["Tip / Extra", aud(m.tipExtra), "kpi-tone-2"],
     ["Tolls Tracked", aud(m.tollTotal), "kpi-tone-4"],
     ["Net Payout", aud(m.netPayout), "kpi-tone-3"],
@@ -807,6 +836,19 @@ function renderDashboardHero() {
   `;
 }
 
+function renderLogbookSummary() {
+  const m = computeMetrics();
+  if (!el("logbookSummary")) return;
+  el("logbookSummary").innerHTML = `
+    <div class="hero-metrics">
+      <div class="hero-chip"><span>Total KM</span><strong>${f2(m.totalKm)}</strong></div>
+      <div class="hero-chip"><span>Uber Trip KM</span><strong>${f2(m.businessKm)}</strong></div>
+      <div class="hero-chip"><span>Business Use</span><strong>${pct(m.businessUsePct)}</strong></div>
+      <div class="hero-chip"><span>Trips Logged</span><strong>${db.trips.length}</strong></div>
+    </div>
+  `;
+}
+
 function computeMetrics(overrides = {}) {
   const fareGross = sum(db.fares, "gross");
   const fareGst = db.fares.reduce((a, x) => a + gstFromFare(x), 0);
@@ -815,7 +857,7 @@ function computeMetrics(overrides = {}) {
   const platformFeeGst = db.fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
   const netPayout = db.fares.reduce((a, x) => a + netPayoutForFare(x), 0);
   const expenseTotal = sum(db.expenses, "amount");
-  const expenseGstCredit = db.expenses.reduce((a, x) => a + (x.gst_claimable ? x.amount / 11 : 0), 0) + platformFeeGst;
+  const expenseGstCredit = db.expenses.reduce((a, x) => a + n(x.gst_claimable ? x.gst_credit : 0), 0) + platformFeeGst;
   const tollTotal = sum(db.tolls, "amount");
   const reimbursedTolls = db.tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
 
@@ -823,7 +865,7 @@ function computeMetrics(overrides = {}) {
   const businessKm = db.trips.reduce((a, x) => a + (x.purpose === "Business" ? Number(x.km) : 0), 0);
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
 
-  const deductibleExpenses = (expenseTotal + platformFees) * businessUsePct;
+  const deductibleExpenses = expenseTotal + platformFees;
 
   const otherIncome = n(overrides.other_income ?? db.tax?.other_income ?? 0);
   const superContrib = n(overrides.super_contribution ?? db.tax?.super_contribution ?? 0);
@@ -853,6 +895,8 @@ function computeMetrics(overrides = {}) {
     expenseGstCredit,
     tollTotal,
     reimbursedTolls,
+    totalKm,
+    businessKm,
     businessUsePct,
     rideshareTaxableIncome,
     taxableIncome,
@@ -963,7 +1007,8 @@ function downloadReportWorkbook(reportType = "full") {
     Category: row.category,
     Amount: round2(row.amount),
     GST_Claimable: row.gst_claimable ? "Yes" : "No",
-    GST_Credit: round2(row.gst_claimable ? row.amount / 11 : 0),
+    GST_Amount: round2(row.gst_amount || 0),
+    GST_Credit: round2(row.gst_credit || 0),
     Notes: row.notes || ""
   }));
   const tolls = filterByRange(db.tolls).map((row) => ({
@@ -1058,7 +1103,7 @@ function computeForRange(from, to) {
   const platformFees = fares.reduce((a, x) => a + n(x.platform_fee), 0);
   const platformFeeGst = fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
   const expenseTotal = sum(expenses, "amount");
-  const expenseGstCredit = expenses.reduce((a, x) => a + (x.gst_claimable ? x.amount / 11 : 0), 0) + platformFeeGst;
+  const expenseGstCredit = expenses.reduce((a, x) => a + n(x.gst_claimable ? x.gst_credit : 0), 0) + platformFeeGst;
   const tollTotal = sum(tolls, "amount");
   const reimbursedTolls = tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
 
@@ -1066,7 +1111,7 @@ function computeForRange(from, to) {
   const businessKm = trips.reduce((a, x) => a + (x.purpose === "Business" ? Number(x.km) : 0), 0);
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
 
-  const deductibleExpenses = (expenseTotal + platformFees) * businessUsePct;
+  const deductibleExpenses = expenseTotal + platformFees;
   const otherIncomeAllocated = allocateAnnualValueToRange(n(db.tax?.other_income || 0), from, to);
   const superAllocated = allocateAnnualValueToRange(n(db.tax?.super_contribution || 0), from, to);
   const rideshareTaxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - superAllocated);
@@ -1176,7 +1221,7 @@ function startEdit(table, id) {
   if (table === "expenses") {
     const r = db.expenses.find((x) => x.id === id); if (!r) return;
     const f = el("expenseForm"); editing.expenses = id;
-    f.date.value = r.date; f.category.value = r.category; f.amount.value = r.amount; f.gst_claimable.value = String(!!r.gst_claimable); f.notes.value = r.notes || "";
+    f.date.value = r.date; f.category.value = r.category; f.amount.value = r.amount; if (f.gst_amount) f.gst_amount.value = round2(r.gst_amount || 0).toFixed(2); f.gst_claimable.value = String(!!r.gst_claimable); if (f.gst_credit) f.gst_credit.value = round2(r.gst_credit || 0).toFixed(2); f.notes.value = r.notes || "";
     setEditUI("expenseSubmitBtn", "expenseCancelEditBtn", true, "Update Expense");
   }
   if (table === "tolls") {

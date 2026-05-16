@@ -252,6 +252,9 @@ input:focus, select:focus {
   margin-top: 6px;
   font-size: 1.08rem;
 }
+.logbook-summary {
+  margin: 12px 0 14px;
+}
 .priority-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; width: 100%; }
 .kpi {
   border-radius: 18px;

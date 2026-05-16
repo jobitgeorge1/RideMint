@@ -50,10 +50,19 @@ create table if not exists expenses (
   date date not null,
   category text not null,
   amount numeric(12,2) not null,
+  gst_amount numeric(12,2) not null default 0,
   gst_claimable boolean not null default true,
+  gst_credit numeric(12,2) not null default 0,
   notes text,
   created_at timestamptz default now()
 );
+
+alter table expenses add column if not exists gst_amount numeric(12,2) not null default 0;
+alter table expenses add column if not exists gst_credit numeric(12,2) not null default 0;
+update expenses
+set gst_amount = case when coalesce(gst_amount, 0) = 0 and gst_claimable then round(amount / 11.0, 2) else coalesce(gst_amount, 0) end,
+    gst_credit = case when coalesce(gst_credit, 0) = 0 and gst_claimable then coalesce(gst_amount, round(amount / 11.0, 2)) else coalesce(gst_credit, 0) end
+where coalesce(gst_amount, 0) = 0 or coalesce(gst_credit, 0) = 0;
 
 create table if not exists tolls (
   id uuid primary key default gen_random_uuid(),

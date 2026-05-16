@@ -22,7 +22,7 @@
       <div>
         <h1>RideMint Ledger Pro</h1>
         <p>Professional rideshare finance app for logbook, GST, BAS, and tax summaries.</p>
-        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-05-16a</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-05-16b</p>
       </div>
       <div class="hero-actions" id="topActions">
         <button id="printReportBtn" class="btn secondary hidden">Download Report</button>
@@ -114,6 +114,7 @@
       <section class="tab-panel hidden" id="tab-logbook">
         <article class="card">
           <h2>ATO Logbook Entry</h2>
+          <div class="logbook-summary" id="logbookSummary"></div>
           <form id="tripForm" class="form-grid">
             <div><label>Date</label><input type="date" name="date" required /></div>
             <div><label>Purpose</label><select name="purpose"><option>Business</option><option>Private</option></select></div>
@@ -167,7 +168,9 @@
             <div><label>Date</label><input type="date" name="date" required /></div>
             <div><label>Category</label><select name="category"><option>Fuel</option><option>Maintenance</option><option>Insurance</option><option>Registration</option><option>Phone/Data</option><option>Car Wash</option><option>Parking</option><option>Other</option></select></div>
             <div><label>Amount (AUD)</label><input type="number" name="amount" step="0.01" min="0" required /></div>
+            <div><label>GST Amount (AUD)</label><input type="number" name="gst_amount" step="0.01" min="0" value="0" /></div>
             <div><label>GST Claimable</label><select name="gst_claimable"><option value="true">Yes</option><option value="false">No</option></select></div>
+            <div><label>GST Credit (AUD)</label><input type="number" name="gst_credit" step="0.01" min="0" value="0" readonly /></div>
             <div class="full"><label>Notes</label><input name="notes" /></div>
             <button class="btn full" id="expenseSubmitBtn" type="submit">Add Expense</button>
             <button class="btn secondary full hidden" id="expenseCancelEditBtn" type="button">Cancel Edit</button>
