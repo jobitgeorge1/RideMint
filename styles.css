@@ -255,6 +255,35 @@ input:focus, select:focus {
 .logbook-summary {
   margin: 12px 0 14px;
 }
+.logbook-summary .hero-metrics {
+  margin-top: 0;
+}
+.logbook-summary .hero-chip {
+  background: linear-gradient(155deg, rgba(255,255,255,0.98), rgba(240,247,255,0.96));
+  border: 1px solid rgba(190, 208, 228, 0.95);
+  box-shadow: 0 10px 24px rgba(19, 44, 76, 0.08);
+}
+.logbook-summary .hero-chip:nth-child(1) {
+  background: linear-gradient(155deg, #eef8ff, #dcefff);
+}
+.logbook-summary .hero-chip:nth-child(2) {
+  background: linear-gradient(155deg, #e6f9f0, #d4f3e4);
+}
+.logbook-summary .hero-chip:nth-child(3) {
+  background: linear-gradient(155deg, #fff5df, #ffe7b6);
+}
+.logbook-summary .hero-chip:nth-child(4) {
+  background: linear-gradient(155deg, #f3ebff, #e2d7ff);
+}
+.logbook-summary .hero-chip span {
+  color: #4a6078;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.logbook-summary .hero-chip strong {
+  color: #10233d;
+  font-weight: 800;
+}
 .priority-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; width: 100%; }
 .kpi {
   border-radius: 18px;

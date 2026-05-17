@@ -32,7 +32,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-16c (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-17a (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -502,22 +502,24 @@ async function importWorkbook() {
     const expenseRows = parseExpenseSheet(wb);
     const logbookRows = parseLogbookSheet(wb);
     const tollRows = parseTollSheet(wb);
+    const schemaWarnings = new Set();
 
-    const incomeResult = incomeRows.length ? await mergeRows("fares", incomeRows, fareImportKey) : { inserted: 0, updated: 0 };
-    const expenseResult = expenseRows.length ? await mergeRows("expenses", expenseRows, expenseImportKey) : { inserted: 0, updated: 0 };
-    const logbookResult = logbookRows.length ? await mergeRows("trips", logbookRows, tripImportKey) : { inserted: 0, updated: 0 };
-    const tollResult = tollRows.length ? await mergeRows("tolls", tollRows, tollImportKey) : { inserted: 0, updated: 0 };
+    const incomeResult = incomeRows.length ? await mergeRows("fares", incomeRows, fareImportKey, schemaWarnings) : { inserted: 0, updated: 0 };
+    const expenseResult = expenseRows.length ? await mergeRows("expenses", expenseRows, expenseImportKey, schemaWarnings) : { inserted: 0, updated: 0 };
+    const logbookResult = logbookRows.length ? await mergeRows("trips", logbookRows, tripImportKey, schemaWarnings) : { inserted: 0, updated: 0 };
+    const tollResult = tollRows.length ? await mergeRows("tolls", tollRows, tollImportKey, schemaWarnings) : { inserted: 0, updated: 0 };
     await refreshAll();
+    const warningText = schemaWarnings.size ? ` Missing DB columns skipped: ${Array.from(schemaWarnings).join(", ")}. Run the latest Supabase SQL to fully sync.` : "";
     setStatus(
       "importStatus",
-      `Import synced. Income: +${incomeResult.inserted} / updated ${incomeResult.updated}, Expenses: +${expenseResult.inserted} / updated ${expenseResult.updated}, Logbook: +${logbookResult.inserted} / updated ${logbookResult.updated}, Tolls: +${tollResult.inserted} / updated ${tollResult.updated}.`
+      `Import synced. Income: +${incomeResult.inserted} / updated ${incomeResult.updated}, Expenses: +${expenseResult.inserted} / updated ${expenseResult.updated}, Logbook: +${logbookResult.inserted} / updated ${logbookResult.updated}, Tolls: +${tollResult.inserted} / updated ${tollResult.updated}.${warningText}`
     );
   } catch (err) {
     setStatus("importStatus", err?.message || "Import failed.", true);
   }
 }
 
-async function mergeRows(table, rows, keyFn) {
+async function mergeRows(table, rows, keyFn, schemaWarnings = new Set()) {
   const { data: existing, error } = await supabase.from(table).select("*");
   if (error) throw new Error(`${cap(table)} lookup failed: ${error.message}`);
   const existingMap = new Map((existing || []).map((row) => [keyFn(row), row]));
@@ -527,19 +529,51 @@ async function mergeRows(table, rows, keyFn) {
     const key = keyFn(row);
     const match = existingMap.get(key);
     if (!match) {
-      const { error: insertError } = await supabase.from(table).insert(row);
+      const insertError = await insertWithSchemaFallback(table, row, schemaWarnings);
       if (insertError) throw new Error(`${cap(table)} import failed: ${insertError.message}`);
       inserted += 1;
       continue;
     }
     const payload = changedPayload(match, row);
     if (Object.keys(payload).length) {
-      const { error: updateError } = await supabase.from(table).update(payload).eq("id", match.id);
+      const updateError = await updateWithSchemaFallback(table, match.id, payload, schemaWarnings);
       if (updateError) throw new Error(`${cap(table)} update failed: ${updateError.message}`);
       updated += 1;
     }
   }
   return { inserted, updated };
+}
+
+async function insertWithSchemaFallback(table, row, schemaWarnings) {
+  const payload = { ...row };
+  while (Object.keys(payload).length) {
+    const { error } = await supabase.from(table).insert(payload);
+    if (!error) return null;
+    const missingColumn = parseMissingSchemaColumn(error);
+    if (!missingColumn || !(missingColumn in payload)) return error;
+    delete payload[missingColumn];
+    schemaWarnings.add(`${table}.${missingColumn}`);
+  }
+  return new Error("All import columns were rejected by the current database schema.");
+}
+
+async function updateWithSchemaFallback(table, id, row, schemaWarnings) {
+  const payload = { ...row };
+  while (Object.keys(payload).length) {
+    const { error } = await supabase.from(table).update(payload).eq("id", id);
+    if (!error) return null;
+    const missingColumn = parseMissingSchemaColumn(error);
+    if (!missingColumn || !(missingColumn in payload)) return error;
+    delete payload[missingColumn];
+    schemaWarnings.add(`${table}.${missingColumn}`);
+  }
+  return null;
+}
+
+function parseMissingSchemaColumn(error) {
+  const msg = error?.message || "";
+  const match = msg.match(/Could not find the '([^']+)' column/i);
+  return match?.[1] || "";
 }
 
 function changedPayload(existing, incoming) {
@@ -564,15 +598,15 @@ function parseIncomeSheet(wb) {
   return rows
     .map((r) => ({
       user_id: currentUser.id,
-      date: normalizeExcelDate(r["From Date"] || r["Date"]),
-      week_end: normalizeExcelDate(r["To Date"]) || addDays(normalizeExcelDate(r["From Date"] || r["Date"]), 6),
+      date: normalizeExcelDate(firstRowValue(r, ["From Date", "Date", "Week Start", "Start Date"])),
+      week_end: normalizeExcelDate(firstRowValue(r, ["To Date", "Week End", "End Date"])) || addDays(normalizeExcelDate(firstRowValue(r, ["From Date", "Date", "Week Start", "Start Date"])), 6),
       platform: "Uber",
-      gross: n(r["Trip Gross Fare"]),
+      gross: n(firstRowValue(r, ["Trip Gross Fare", "Gross Fare", "Fare"])),
       gst_included: true,
-      platform_fee: n(r["Uber Service Fee"]),
-      platform_fee_gst: n(r["GST on Uber Fee"]),
-      tip_extra: n(r["Tip/Extra"]),
-      net_payout: n(r["Net Payout"]) || round2(n(r["Trip Gross Fare"]) + n(r["Tip/Extra"]) - n(r["Uber Service Fee"]))
+      platform_fee: n(firstRowValue(r, ["Uber Service Fee", "Platform Fee"])),
+      platform_fee_gst: n(firstRowValue(r, ["GST on Uber Fee", "Platform Fee GST"])),
+      tip_extra: n(firstRowValue(r, ["Tip/Extra", "Tip / Extra", "Tips"])),
+      net_payout: n(firstRowValue(r, ["Net Payout", "Net"])) || round2(n(firstRowValue(r, ["Trip Gross Fare", "Gross Fare", "Fare"])) + n(firstRowValue(r, ["Tip/Extra", "Tip / Extra", "Tips"])) - n(firstRowValue(r, ["Uber Service Fee", "Platform Fee"])))
     }))
     .filter((x) => x.date && x.gross > 0);
 }
@@ -586,12 +620,12 @@ function parseExpenseSheet(wb) {
       const notes = [r["Supplier"], r["Notes"]].filter(Boolean).join(" | ");
       return {
         user_id: currentUser.id,
-        date: normalizeExcelDate(r["Date"]),
-        category: String(r["Expense Type"] || "Other"),
-        amount: n(r["Total Amount"]),
-        gst_amount: n(r["GST Amount"]),
-        gst_claimable: n(r["GST Claimable"]) > 0,
-        gst_credit: n(r["GST Claimable"]),
+        date: normalizeExcelDate(firstRowValue(r, ["Date", "Expense Date"])),
+        category: String(firstRowValue(r, ["Expense Type", "Category", "Expense"]) || "Other"),
+        amount: n(firstRowValue(r, ["Total Amount", "Amount"])),
+        gst_amount: n(firstRowValue(r, ["GST Amount", "GST"])),
+        gst_claimable: n(firstRowValue(r, ["GST Claimable", "Claimable GST"])) > 0,
+        gst_credit: n(firstRowValue(r, ["GST Claimable", "Claimable GST"])),
         notes
       };
     })
@@ -645,6 +679,13 @@ function normalizeExcelDate(v) {
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return "";
   return d.toISOString().slice(0, 10);
+}
+
+function firstRowValue(row, keys) {
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== null && row[key] !== "") return row[key];
+  }
+  return "";
 }
 
 async function onAddTrip(e) {
