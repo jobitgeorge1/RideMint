@@ -209,16 +209,28 @@
 
       <section class="tab-panel hidden" id="tab-reports">
         <article class="card">
-          <h2>Summaries & Reports</h2>
+          <h2>Reporting Studio</h2>
+          <p class="small-note">Switch between operational, GST, tax, trend, expense and logbook reports. Each report now has its own view and export behavior.</p>
           <div class="grid2">
             <div><label>Summary Period</label><select id="summaryPeriod"><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select></div>
             <div><label>Year</label><input id="summaryYear" type="number" min="2020" max="2100" /></div>
           </div>
-          <div class="row">
-            <button id="refreshSummaryBtn" class="btn" type="button">Generate Summary</button>
-            <button id="printBasBtn" class="btn secondary" type="button">Download BAS Report</button>
-            <button id="printTaxBtn" class="btn secondary" type="button">Download Tax Report</button>
+          <div class="report-switcher" id="reportSwitcher">
+            <button class="report-switch active" data-report-kind="executive" type="button">Executive Snapshot</button>
+            <button class="report-switch" data-report-kind="bas" type="button">BAS & GST Ledger</button>
+            <button class="report-switch" data-report-kind="tax" type="button">Tax Position</button>
+            <button class="report-switch" data-report-kind="weekly" type="button">Weekly Earnings Trend</button>
+            <button class="report-switch" data-report-kind="expenses" type="button">Expense Breakdown</button>
+            <button class="report-switch" data-report-kind="logbook" type="button">Logbook Compliance</button>
           </div>
+          <div class="row">
+            <button id="refreshSummaryBtn" class="btn" type="button">Refresh View</button>
+            <button id="reportPdfBtn" class="btn secondary" type="button">Open PDF View</button>
+            <button id="reportExcelBtn" class="btn secondary" type="button">Download Excel</button>
+            <button id="reportCsvBtn" class="btn secondary" type="button">Download CSV</button>
+            <button id="reportFullWorkbookBtn" class="btn secondary" type="button">Download Full Workbook</button>
+          </div>
+          <div id="reportMeta" class="small-note"></div>
           <div id="reportArea" class="report"></div>
         </article>
       </section>

@@ -17,6 +17,7 @@ let isAdmin = false;
 let db = { trips: [], fares: [], expenses: [], tolls: [], tax: null, platforms: [] };
 let editing = { trips: null, fares: null, expenses: null, tolls: null };
 let activeTab = "dashboard";
+let activeReportKind = "executive";
 
 const el = (id) => document.getElementById(id);
 
@@ -32,7 +33,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-17a (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-18a (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -63,8 +64,10 @@ function wireEvents() {
   bindSubmit("taxForm", onSaveTax);
 
   bindClick("refreshSummaryBtn", renderReport);
-  bindClick("printBasBtn", () => downloadReportWorkbook("bas"));
-  bindClick("printTaxBtn", () => downloadReportWorkbook("tax"));
+  bindClick("reportPdfBtn", openReportPdfView);
+  bindClick("reportExcelBtn", () => downloadReportWorkbook(activeReportKind));
+  bindClick("reportCsvBtn", () => downloadReportCsv(activeReportKind));
+  bindClick("reportFullWorkbookBtn", () => downloadReportWorkbook("full"));
   bindClick("printReportBtn", () => downloadReportWorkbook("full"));
   bindClick("printReportBtn2", () => downloadReportWorkbook("full"));
   bindClick("exportLogbookCsvBtn", exportLogbookCsv);
@@ -82,6 +85,17 @@ function wireEvents() {
   bindFareWeekFields();
   bindTaxLivePreview();
   bindExpenseGstCalc();
+  bindReportSwitcher();
+}
+
+function bindReportSwitcher() {
+  document.querySelectorAll(".report-switch").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      activeReportKind = btn.dataset.reportKind || "executive";
+      updateReportSwitcher();
+      renderReport();
+    });
+  });
 }
 
 function bindFareFeeAutoCalc() {
@@ -962,50 +976,13 @@ function computeMetrics(overrides = {}) {
 function renderReport(forceType = null) {
   const period = el("summaryPeriod").value;
   const year = Number(el("summaryYear").value || new Date().getFullYear());
-  const type = forceType || "combined";
-  const buckets = bucketizeByPeriod(period, year);
-
-  let html = `<h3>ATO Summary Report</h3><div class="meta">Period: ${cap(period)} | Year: ${year} | Generated: ${new Date().toLocaleString("en-AU")}</div>`;
-  html += `<table><tr><th>Period</th><th>Fare</th><th>Expenses</th><th>GST Collected</th><th>GST Credits</th><th>GST Payable</th><th>Taxable Income</th><th>Income Tax Payable</th><th>PAYG Paid</th><th>In-Hand</th></tr>`;
-
-  buckets.forEach((b) => {
-    const m = computeForRange(b.from, b.to);
-    html += `<tr><td>${b.label}</td><td>${aud(m.fareGross)}</td><td>${aud(m.expenseTotal)}</td><td>${aud(m.fareGst)}</td><td>${aud(m.expenseGstCredit)}</td><td>${aud(m.gstPayable)}</td><td>${aud(m.taxableIncome)}</td><td>${aud(m.uberTaxPayable)}</td><td>${aud(m.otherIncomeTaxPaid)}</td><td>${aud(m.inHand)}</td></tr>`;
-  });
-  html += `</table>`;
-
-  const all = computeMetrics();
-  const basSection = `
-    <h3>BAS Summary (Estimate)</h3>
-    <div class="report-grid">
-      ${line("G1 Total Sales", aud(all.fareGross))}
-      ${line("1A GST on Sales", aud(all.fareGst))}
-      ${line("1B GST on Purchases", aud(all.expenseGstCredit))}
-      ${line("Net GST Payable", aud(all.gstPayable))}
-    </div>
-  `;
-
-  const taxSection = `
-    <h3>Tax Summary (Estimate)</h3>
-    <div class="report-grid">
-      ${line("Taxable Income", aud(all.taxableIncome))}
-      ${line("PAYG Income Entered", aud(n(db.tax?.other_income || 0)))}
-      ${line("Tip / Extra", aud(all.tipExtra))}
-      ${line("Income Tax", aud(all.incomeTax))}
-      ${line("Medicare Levy (2%)", aud(all.medicare))}
-      ${line("Total Tax", aud(all.totalTax))}
-      ${line("Income Tax Payable", aud(all.uberTaxPayable))}
-      ${line("PAYG Tax Already Paid", aud(all.otherIncomeTaxPaid))}
-      ${line("Current Tax Slab", esc(all.slabLabel))}
-      ${line("Net In-Hand", aud(all.inHand))}
-    </div>
-  `;
-
-  if (type === "bas") html = basSection;
-  if (type === "tax") html = taxSection;
-  if (type === "combined") html += basSection + taxSection + atoLogbookDeclaration();
-
-  el("reportArea").innerHTML = html;
+  const reportKind = forceType || activeReportKind;
+  activeReportKind = reportKind;
+  updateReportSwitcher();
+  const report = buildReportModel(reportKind, period, year);
+  updateReportActionLabels(report);
+  if (el("reportMeta")) el("reportMeta").textContent = `${report.title} | ${cap(period)} ${year} | ${report.exportLabel}`;
+  el("reportArea").innerHTML = report.html;
 }
 
 function downloadReportWorkbook(reportType = "full") {
@@ -1114,17 +1091,101 @@ function downloadReportWorkbook(reportType = "full") {
     In_Hand: round2(allMetrics.inHand)
   }];
 
-  const workbook = window.XLSX.utils.book_new();
-  appendSheet(workbook, "Overview", overviewRows);
-  appendSheet(workbook, "Period Summary", reportRows);
-  appendSheet(workbook, "BAS Summary", basRows);
-  appendSheet(workbook, "Tax Summary", taxRows);
-  appendSheet(workbook, "Fares", fares);
-  appendSheet(workbook, "Expenses", expenses);
-  appendSheet(workbook, "Tolls", tolls);
-  appendSheet(workbook, "Logbook", trips);
+  const weeklyRows = weeklyFareSummaries()
+    .filter((x) => x.start >= startDate && x.start <= endDate)
+    .map((x) => ({
+      Week: x.label,
+      Gross: x.gross,
+      Tips: x.tipExtra,
+      Platform_Fees: x.platformFees,
+      Net_Payout: x.netPayout,
+      GST_Payable_Share: x.gstPayableShare,
+      Tax_Payable_Share: x.taxPayableShare
+    }));
+  const expenseByCategory = expenseCategoryBreakdown(startDate, endDate).map((row) => ({
+    Category: row.category,
+    Amount: round2(row.amount),
+    GST_Credit: round2(row.gstCredit),
+    Share_Pct: round2(row.share * 100)
+  }));
+  const logbookSummary = [{
+    Total_KM: round2(rangeMetrics.totalKm || 0),
+    Uber_KM: round2(rangeMetrics.businessKm || 0),
+    Business_Use_Pct: round2((rangeMetrics.businessUsePct || 0) * 100),
+    Trips_Logged: rangeMetrics.tripCount || 0
+  }];
 
-  const suffix = reportType === "bas" ? "bas-report" : reportType === "tax" ? "tax-report" : "full-report";
+  const workbook = window.XLSX.utils.book_new();
+  const reportSheets = {
+    executive: [
+      ["Overview", overviewRows],
+      ["Period Summary", reportRows],
+      ["Weekly Trend", weeklyRows],
+      ["Expense Mix", expenseByCategory]
+    ],
+    bas: [
+      ["BAS Summary", basRows],
+      ["GST Ledger", reportRows.map((row) => ({
+        Period: row.Period,
+        GST_Collected: row.GST_Collected,
+        GST_Credits: row.GST_Credits,
+        GST_Payable: row.GST_Payable
+      }))],
+      ["Fares", fares],
+      ["Expenses", expenses]
+    ],
+    tax: [
+      ["Tax Summary", taxRows],
+      ["Period Tax", reportRows.map((row) => ({
+        Period: row.Period,
+        Taxable_Income: row.Taxable_Income,
+        Income_Tax_Payable: row.Income_Tax_Payable,
+        PAYG_Tax_Paid: row.PAYG_Tax_Paid,
+        In_Hand: row.In_Hand
+      }))],
+      ["Expenses", expenses]
+    ],
+    weekly: [
+      ["Weekly Trend", weeklyRows],
+      ["Fares", fares],
+      ["Period Summary", reportRows]
+    ],
+    expenses: [
+      ["Expense Mix", expenseByCategory],
+      ["Expenses", expenses],
+      ["BAS Credits", basRows]
+    ],
+    logbook: [
+      ["Logbook Summary", logbookSummary],
+      ["Logbook", trips]
+    ],
+    full: [
+      ["Overview", overviewRows],
+      ["Period Summary", reportRows],
+      ["BAS Summary", basRows],
+      ["Tax Summary", taxRows],
+      ["Weekly Trend", weeklyRows],
+      ["Expense Mix", expenseByCategory],
+      ["Logbook Summary", logbookSummary],
+      ["Fares", fares],
+      ["Expenses", expenses],
+      ["Tolls", tolls],
+      ["Logbook", trips]
+    ]
+  };
+  const selectedSheets = reportSheets[reportType] || reportSheets.full;
+  selectedSheets.forEach(([name, rows]) => appendSheet(workbook, name, rows));
+
+  const suffixMap = {
+    executive: "executive-snapshot",
+    bas: "bas-gst-ledger",
+    tax: "tax-position",
+    weekly: "weekly-earnings",
+    expenses: "expense-breakdown",
+    logbook: "logbook-compliance",
+    full: "full-report"
+  };
+  const suffix = suffixMap[reportType] || "full-report";
   window.XLSX.writeFile(workbook, `ridemint-${suffix}-${year}.xlsx`);
 }
 
@@ -1132,6 +1193,310 @@ function appendSheet(workbook, name, rows) {
   const safeRows = rows.length ? rows : [{ Message: "No data for selected report period." }];
   const sheet = window.XLSX.utils.json_to_sheet(safeRows);
   window.XLSX.utils.book_append_sheet(workbook, sheet, name);
+}
+
+function buildReportModel(kind, period, year) {
+  const buckets = bucketizeByPeriod(period, year);
+  const startDate = buckets[0]?.from || `${year}-01-01`;
+  const endDate = buckets[buckets.length - 1]?.to || `${year}-12-31`;
+  const totals = computeForRange(startDate, endDate);
+  const periodRows = buckets.map((bucket) => ({ label: bucket.label, ...computeForRange(bucket.from, bucket.to) }));
+  const weeklyRows = weeklyFareSummaries().filter((x) => x.start >= startDate && x.start <= endDate);
+  const expenseRows = expenseCategoryBreakdown(startDate, endDate);
+  const reportMap = {
+    executive: {
+      title: "Executive Snapshot",
+      exportLabel: "Excel snapshot, CSV summary, PDF/print view",
+      html: renderExecutiveReport(period, year, totals, periodRows, weeklyRows, expenseRows)
+    },
+    bas: {
+      title: "BAS & GST Ledger",
+      exportLabel: "Excel BAS ledger, CSV GST ledger, PDF BAS view",
+      html: renderBasReport(period, year, totals, periodRows)
+    },
+    tax: {
+      title: "Tax Position",
+      exportLabel: "Excel tax workbook, CSV tax periods, PDF tax view",
+      html: renderTaxReport(period, year, totals, periodRows)
+    },
+    weekly: {
+      title: "Weekly Earnings Trend",
+      exportLabel: "Excel weekly trend, CSV weekly rows, PDF weekly trend",
+      html: renderWeeklyTrendReport(period, year, totals, weeklyRows)
+    },
+    expenses: {
+      title: "Expense Breakdown",
+      exportLabel: "Excel expense mix, CSV expense categories, PDF expense report",
+      html: renderExpenseReport(period, year, totals, expenseRows)
+    },
+    logbook: {
+      title: "Logbook Compliance",
+      exportLabel: "Excel logbook pack, CSV logbook rows, PDF compliance view",
+      html: renderLogbookReport(period, year, totals, startDate, endDate)
+    }
+  };
+  return reportMap[kind] || reportMap.executive;
+}
+
+function updateReportSwitcher() {
+  document.querySelectorAll(".report-switch").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.reportKind === activeReportKind);
+  });
+}
+
+function updateReportActionLabels(report) {
+  if (el("reportPdfBtn")) el("reportPdfBtn").textContent = `Open ${report.title} PDF`;
+  if (el("reportExcelBtn")) el("reportExcelBtn").textContent = `Download ${report.title} Excel`;
+  if (el("reportCsvBtn")) el("reportCsvBtn").textContent = `Download ${report.title} CSV`;
+}
+
+function renderExecutiveReport(period, year, totals, periodRows, weeklyRows, expenseRows) {
+  return `
+    <div class="report-header">
+      <div>
+        <h3>Executive Snapshot</h3>
+        <div class="meta">${cap(period)} ${year} | Quick read of cash, GST, tax and operations.</div>
+      </div>
+    </div>
+    <div class="report-kpis">
+      ${reportKpi("Net Payout", aud(totals.netPayout))}
+      ${reportKpi("In Hand", aud(totals.inHand))}
+      ${reportKpi("GST Payable", aud(totals.gstPayable))}
+      ${reportKpi("Income Tax Payable", aud(totals.uberTaxPayable))}
+    </div>
+    <div class="report-two-up">
+      <section>
+        <h4>Period Performance</h4>
+        ${renderBarChart(periodRows.map((row) => ({ label: row.label, value: row.inHand })), "In-Hand")}
+      </section>
+      <section>
+        <h4>Expense Mix</h4>
+        ${renderBarChart(expenseRows.map((row) => ({ label: row.category, value: row.amount })), "Expense")}
+      </section>
+    </div>
+    <h4>Period Summary Table</h4>
+    ${htmlTable(["Period", "Fare", "GST", "Tax", "In Hand"], periodRows.map((row) => [row.label, aud(row.fareGross), aud(row.gstPayable), aud(row.uberTaxPayable), aud(row.inHand)]))}
+    <h4>Top Weekly Weeks</h4>
+    ${htmlTable(["Week", "Gross", "Tips", "Net Payout"], weeklyRows.slice(0, 8).map((row) => [row.label, aud(row.gross), aud(row.tipExtra), aud(row.netPayout)]))}
+  `;
+}
+
+function renderBasReport(period, year, totals, periodRows) {
+  return `
+    <div class="report-header">
+      <div>
+        <h3>BAS & GST Ledger</h3>
+        <div class="meta">${cap(period)} ${year} | GST on sales, GST credits and BAS-ready period breakdown.</div>
+      </div>
+    </div>
+    <div class="report-kpis">
+      ${reportKpi("G1 Total Sales", aud(totals.fareGross))}
+      ${reportKpi("1A GST on Sales", aud(totals.fareGst))}
+      ${reportKpi("1B GST Credits", aud(totals.expenseGstCredit))}
+      ${reportKpi("Net GST Payable", aud(totals.gstPayable))}
+    </div>
+    <h4>GST Ledger by Period</h4>
+    ${htmlTable(["Period", "GST on Sales", "GST Credits", "GST Payable"], periodRows.map((row) => [row.label, aud(row.fareGst), aud(row.expenseGstCredit), aud(row.gstPayable)]))}
+    <h4>GST Movement Chart</h4>
+    ${renderDualBarChart(periodRows.map((row) => ({ label: row.label, left: row.fareGst, right: row.expenseGstCredit })), "Sales GST", "Credits")}
+  `;
+}
+
+function renderTaxReport(period, year, totals, periodRows) {
+  return `
+    <div class="report-header">
+      <div>
+        <h3>Tax Position</h3>
+        <div class="meta">${cap(period)} ${year} | Income tax, PAYG offset and effective tax position.</div>
+      </div>
+    </div>
+    <div class="report-kpis">
+      ${reportKpi("Taxable Income", aud(totals.taxableIncome))}
+      ${reportKpi("Income Tax Payable", aud(totals.uberTaxPayable))}
+      ${reportKpi("PAYG Tax Paid", aud(totals.otherIncomeTaxPaid))}
+      ${reportKpi("Effective Tax Rate", pct(totals.totalTax / Math.max(totals.taxableIncome, 1)))}
+    </div>
+    <div class="report-grid">
+      ${line("Rideshare Taxable Income", aud(totals.rideshareTaxableIncome))}
+      ${line("Total Tax", aud(totals.totalTax))}
+      ${line("Medicare Levy", aud(totals.medicare))}
+      ${line("Current Slab", esc(taxSlabForIncome(totals.taxableIncome).label))}
+    </div>
+    <h4>Period Tax Table</h4>
+    ${htmlTable(["Period", "Taxable Income", "Income Tax Payable", "PAYG Paid", "In Hand"], periodRows.map((row) => [row.label, aud(row.taxableIncome), aud(row.uberTaxPayable), aud(row.otherIncomeTaxPaid), aud(row.inHand)]))}
+    <h4>Tax Trend</h4>
+    ${renderBarChart(periodRows.map((row) => ({ label: row.label, value: row.uberTaxPayable })), "Tax")}
+  `;
+}
+
+function renderWeeklyTrendReport(period, year, totals, weeklyRows) {
+  return `
+    <div class="report-header">
+      <div>
+        <h3>Weekly Earnings Trend</h3>
+        <div class="meta">${cap(period)} ${year} | Weekly gross, tips, payout, GST and tax allocation.</div>
+      </div>
+    </div>
+    <div class="report-kpis">
+      ${reportKpi("Weeks Logged", String(weeklyRows.length))}
+      ${reportKpi("Average Weekly Gross", aud(avg(weeklyRows.map((x) => x.gross))))}
+      ${reportKpi("Average Weekly Net", aud(avg(weeklyRows.map((x) => x.netPayout))))}
+      ${reportKpi("Best Week", aud(Math.max(0, ...weeklyRows.map((x) => x.netPayout))))}
+    </div>
+    <h4>Weekly Payout Chart</h4>
+    ${renderBarChart(weeklyRows.map((row) => ({ label: row.start.slice(5), value: row.netPayout })), "Net")}
+    <h4>Weekly Detail</h4>
+    ${htmlTable(["Week", "Gross", "Tips", "Platform Fees", "Net Payout", "GST Share", "Tax Share"], weeklyRows.map((row) => [row.label, aud(row.gross), aud(row.tipExtra), aud(row.platformFees), aud(row.netPayout), aud(row.gstPayableShare), aud(row.taxPayableShare)]))}
+  `;
+}
+
+function renderExpenseReport(period, year, totals, expenseRows) {
+  return `
+    <div class="report-header">
+      <div>
+        <h3>Expense Breakdown</h3>
+        <div class="meta">${cap(period)} ${year} | Cost mix, GST credits and deductible profile.</div>
+      </div>
+    </div>
+    <div class="report-kpis">
+      ${reportKpi("Total Expenses", aud(totals.expenseTotal))}
+      ${reportKpi("GST Credits", aud(totals.expenseGstCredit))}
+      ${reportKpi("Business Use", pct(totals.businessUsePct))}
+      ${reportKpi("Platform Fees", aud(totals.platformFees))}
+    </div>
+    <h4>Expense Category Chart</h4>
+    ${renderBarChart(expenseRows.map((row) => ({ label: row.category, value: row.amount })), "Expense")}
+    <h4>Expense Category Table</h4>
+    ${htmlTable(["Category", "Amount", "GST Credit", "Share"], expenseRows.map((row) => [row.category, aud(row.amount), aud(row.gstCredit), pct(row.share)]))}
+  `;
+}
+
+function renderLogbookReport(period, year, totals, startDate, endDate) {
+  const rows = db.trips.filter((row) => row.date >= startDate && row.date <= endDate).slice(0, 20);
+  return `
+    <div class="report-header">
+      <div>
+        <h3>Logbook Compliance</h3>
+        <div class="meta">${cap(period)} ${year} | KM evidence, business-use percentage and recent trip entries.</div>
+      </div>
+    </div>
+    <div class="report-kpis">
+      ${reportKpi("Total KM", f2(totals.totalKm || 0))}
+      ${reportKpi("Uber KM", f2(totals.businessKm || 0))}
+      ${reportKpi("Business Use", pct(totals.businessUsePct || 0))}
+      ${reportKpi("Trips Logged", String(totals.tripCount || 0))}
+    </div>
+    <div class="report-grid">
+      ${line("ATO Logbook Status", totals.tripCount ? "Entries present" : "No entries")}
+      ${line("Business KM Ratio", pct(totals.businessUsePct || 0))}
+      ${line("Date Range", `${startDate} to ${endDate}`)}
+      ${line("Export Advice", "Keep supporting invoices and receipts")}
+    </div>
+    <h4>Recent Logbook Entries</h4>
+    ${htmlTable(["Date", "Purpose", "Start Odo", "End Odo", "KM", "Notes"], rows.map((row) => [row.date, row.purpose, f2(row.odo_start), f2(row.odo_end), f2(row.km), esc(row.notes || "")]))}
+    ${atoLogbookDeclaration()}
+  `;
+}
+
+function reportKpi(label, value) {
+  return `<div class="report-kpi"><span>${label}</span><strong>${value}</strong></div>`;
+}
+
+function htmlTable(headers, rows) {
+  return `<table>${tableHtml(headers, rows)}</table>`;
+}
+
+function renderBarChart(rows, valueLabel) {
+  if (!rows.length) return `<div class="empty-chart">No data for this report.</div>`;
+  const max = Math.max(...rows.map((row) => n(row.value)), 1);
+  return `<div class="bar-chart">${rows.map((row) => `
+    <div class="bar-row">
+      <div class="bar-label">${esc(row.label)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${(n(row.value) / max) * 100}%"></div></div>
+      <div class="bar-value">${aud(row.value)}</div>
+    </div>
+  `).join("")}</div><div class="chart-caption">${valueLabel}</div>`;
+}
+
+function renderDualBarChart(rows, leftLabel, rightLabel) {
+  if (!rows.length) return `<div class="empty-chart">No data for this report.</div>`;
+  const max = Math.max(...rows.flatMap((row) => [n(row.left), n(row.right)]), 1);
+  return `<div class="dual-bar-chart">${rows.map((row) => `
+    <div class="dual-row">
+      <div class="bar-label">${esc(row.label)}</div>
+      <div class="dual-track">
+        <div class="bar-fill left" style="width:${(n(row.left) / max) * 100}%"></div>
+        <div class="bar-fill right" style="width:${(n(row.right) / max) * 100}%"></div>
+      </div>
+      <div class="dual-values">${aud(row.left)} / ${aud(row.right)}</div>
+    </div>
+  `).join("")}</div><div class="chart-legend"><span class="legend left"></span>${leftLabel}<span class="legend right"></span>${rightLabel}</div>`;
+}
+
+function expenseCategoryBreakdown(startDate, endDate) {
+  const rows = db.expenses.filter((row) => row.date >= startDate && row.date <= endDate);
+  const businessUsePct = computeForRange(startDate, endDate).businessUsePct;
+  const map = new Map();
+  rows.forEach((row) => {
+    const category = row.category || "Other";
+    if (!map.has(category)) map.set(category, { category, amount: 0, gstCredit: 0 });
+    const item = map.get(category);
+    item.amount += n(row.amount);
+    item.gstCredit += expenseGstCreditValue(row, businessUsePct);
+  });
+  const total = Array.from(map.values()).reduce((a, x) => a + x.amount, 0) || 1;
+  return Array.from(map.values())
+    .map((row) => ({ ...row, share: row.amount / total }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
+function downloadReportCsv(kind) {
+  const period = el("summaryPeriod").value;
+  const year = Number(el("summaryYear").value || new Date().getFullYear());
+  const buckets = bucketizeByPeriod(period, year);
+  const startDate = buckets[0]?.from || `${year}-01-01`;
+  const endDate = buckets[buckets.length - 1]?.to || `${year}-12-31`;
+  let headers = [];
+  let rows = [];
+  if (kind === "weekly") {
+    headers = ["week", "gross", "tips", "platform_fees", "net_payout", "gst_share", "tax_share"];
+    rows = weeklyFareSummaries().filter((row) => row.start >= startDate && row.start <= endDate).map((row) => [row.label, row.gross, row.tipExtra, row.platformFees, row.netPayout, row.gstPayableShare, row.taxPayableShare]);
+  } else if (kind === "expenses") {
+    headers = ["category", "amount", "gst_credit", "share_pct"];
+    rows = expenseCategoryBreakdown(startDate, endDate).map((row) => [row.category, round2(row.amount), round2(row.gstCredit), round2(row.share * 100)]);
+  } else if (kind === "logbook") {
+    headers = ["date", "purpose", "odo_start", "odo_end", "km", "notes"];
+    rows = db.trips.filter((row) => row.date >= startDate && row.date <= endDate).map((row) => [row.date, row.purpose, row.odo_start, row.odo_end, row.km, row.notes || ""]);
+  } else {
+    headers = ["period", "fare", "gst_collected", "gst_credits", "gst_payable", "taxable_income", "income_tax_payable", "in_hand"];
+    rows = bucketizeByPeriod(period, year).map((bucket) => {
+      const row = computeForRange(bucket.from, bucket.to);
+      return [bucket.label, round2(row.fareGross), round2(row.fareGst), round2(row.expenseGstCredit), round2(row.gstPayable), round2(row.taxableIncome), round2(row.uberTaxPayable), round2(row.inHand)];
+    });
+  }
+  const lines = [headers.join(",")].concat(rows.map((row) => row.map(csvCell).join(",")));
+  downloadFile(`ridemint-${kind}-${year}.csv`, lines.join("\n"), "text/csv");
+}
+
+function openReportPdfView() {
+  const report = buildReportModel(activeReportKind, el("summaryPeriod").value, Number(el("summaryYear").value || new Date().getFullYear()));
+  const win = window.open("", "_blank");
+  if (!win) return;
+  win.document.write(`<!doctype html><html><head><title>${report.title}</title><style>
+    body{font-family:Arial,sans-serif;padding:24px;color:#10233d}
+    h3,h4{margin:0 0 10px} .meta{color:#5b6b7c;margin-bottom:14px}
+    table{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}
+    th,td{border:1px solid #d8e2ed;padding:8px;text-align:left}
+    .report-kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px}
+    .report-kpi{border:1px solid #d8e2ed;border-radius:12px;padding:10px}
+    .report-kpi span{display:block;color:#60748a;font-size:12px}.report-kpi strong{display:block;font-size:18px;margin-top:4px}
+    .bar-row,.dual-row{display:grid;grid-template-columns:140px 1fr 140px;gap:10px;align-items:center;margin:8px 0}
+    .bar-track,.dual-track{height:12px;background:#edf4fb;border-radius:999px;overflow:hidden}
+    .bar-fill{height:100%;background:#2563eb}.bar-fill.right{background:#14b8a6}.bar-fill.left{background:#2563eb}
+  </style></head><body>${report.html}</body></html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 250);
 }
 
 function currentBusinessUsePct() {
@@ -1159,12 +1524,14 @@ function computeForRange(from, to) {
   const tipExtra = fares.reduce((a, x) => a + n(x.tip_extra), 0);
   const platformFees = fares.reduce((a, x) => a + n(x.platform_fee), 0);
   const platformFeeGst = fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
+  const netPayout = fares.reduce((a, x) => a + netPayoutForFare(x), 0);
   const expenseTotal = sum(expenses, "amount");
   const tollTotal = sum(tolls, "amount");
   const reimbursedTolls = tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
 
   const totalKm = sum(trips, "km");
   const businessKm = trips.reduce((a, x) => a + (x.purpose === "Business" ? Number(x.km) : 0), 0);
+  const tripCount = trips.length;
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
   const expenseGstCredit = expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0) + platformFeeGst;
 
@@ -1184,9 +1551,16 @@ function computeForRange(from, to) {
     fareGross,
     tipExtra,
     expenseTotal,
+    netPayout,
+    platformFees,
+    tollTotal,
+    reimbursedTolls,
     fareGst,
     expenseGstCredit,
     gstPayable,
+    totalKm,
+    businessKm,
+    tripCount,
     businessUsePct,
     rideshareTaxableIncome,
     taxableIncome,
@@ -1469,6 +1843,7 @@ function setStatus(id, msg, isErr = false) { const e = el(id); e.textContent = m
 function n(v) { return Number(v || 0); }
 function round2(v) { return Number(n(v).toFixed(2)); }
 function sum(arr, k) { return arr.reduce((a, x) => a + n(x[k]), 0); }
+function avg(arr) { return arr.length ? sum(arr.map((x) => ({ value: x })), "value") / arr.length : 0; }
 function f2(v) { return n(v).toFixed(2); }
 function aud(v) { return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n(v)); }
 function pct(v) { return `${(n(v) * 100).toFixed(1)}%`; }
