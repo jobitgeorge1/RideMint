@@ -18,6 +18,7 @@ let db = { trips: [], fares: [], expenses: [], tolls: [], tax: null, platforms: 
 let editing = { trips: null, fares: null, expenses: null, tolls: null };
 let activeTab = "dashboard";
 let activeReportKind = "executive";
+let rowActionDelegatesBound = false;
 
 const el = (id) => document.getElementById(id);
 
@@ -33,7 +34,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-18a (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-25a (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -86,6 +87,7 @@ function wireEvents() {
   bindTaxLivePreview();
   bindExpenseGstCalc();
   bindReportSwitcher();
+  bindRowActionDelegates();
 }
 
 function bindReportSwitcher() {
@@ -1609,17 +1611,6 @@ function exportLogbookCsv() {
 }
 
 function bindRowActions() {
-  document.querySelectorAll(".del").forEach((b) => {
-    b.onclick = async () => {
-      const table = b.dataset.table;
-      const id = b.dataset.id;
-      await supabase.from(table).delete().eq("id", id);
-      await refreshAll();
-    };
-  });
-  document.querySelectorAll(".edit").forEach((b) => {
-    b.onclick = () => startEdit(b.dataset.table, b.dataset.id);
-  });
   bindSwipeRows();
 }
 
@@ -1628,9 +1619,32 @@ function tableHtml(headers, rows) {
   const b = rows.length ? rows.map((r) => `<tr class="swipe-row">${r.map((c, i) => `<td class="${i === r.length - 1 ? "action-cell" : ""}">${c}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${headers.length}">No records.</td></tr>`;
   return h + b;
 }
-function delBtn(table, id) { return `<button class="del" data-table="${table}" data-id="${id}">Delete</button>`; }
-function editBtn(table, id) { return `<button class="edit" data-table="${table}" data-id="${id}">Edit</button>`; }
+function delBtn(table, id) { return `<button type="button" class="del" data-table="${table}" data-id="${id}">Delete</button>`; }
+function editBtn(table, id) { return `<button type="button" class="edit" data-table="${table}" data-id="${id}">Edit</button>`; }
 function actionBtns(table, id) { return `<div class="actions-row">${editBtn(table, id)} ${delBtn(table, id)}</div>`; }
+
+function bindRowActionDelegates() {
+  if (rowActionDelegatesBound) return;
+  rowActionDelegatesBound = true;
+  document.addEventListener("click", async (evt) => {
+    const editButton = evt.target.closest(".edit");
+    if (editButton) {
+      evt.preventDefault();
+      startEdit(editButton.dataset.table, editButton.dataset.id);
+      return;
+    }
+    const deleteButton = evt.target.closest(".del");
+    if (deleteButton) {
+      evt.preventDefault();
+      const table = deleteButton.dataset.table;
+      const id = deleteButton.dataset.id;
+      if (!table || !id || !supabase) return;
+      const { error } = await supabase.from(table).delete().eq("id", id);
+      if (error) return alert(`Delete failed: ${error.message}`);
+      await refreshAll();
+    }
+  });
+}
 
 function startEdit(table, id) {
   if (table === "trips") {
@@ -1680,14 +1694,24 @@ function setEditUI(submitId, cancelId, isEditing, submitLabel) {
 function bindSwipeRows() {
   const rows = document.querySelectorAll(".swipe-row");
   rows.forEach((row) => {
+    if (row.dataset.swipeBound === "true") return;
+    row.dataset.swipeBound = "true";
     let startX = 0;
-    row.ontouchstart = (e) => { startX = e.changedTouches[0].clientX; };
-    row.ontouchend = (e) => {
-      const endX = e.changedTouches[0].clientX;
-      const dx = endX - startX;
-      if (dx < -40) row.classList.add("reveal");
-      if (dx > 24) row.classList.remove("reveal");
-    };
+    let startY = 0;
+    row.addEventListener("touchstart", (e) => {
+      const touch = e.changedTouches[0];
+      startX = touch.clientX;
+      startY = touch.clientY;
+    }, { passive: true });
+    row.addEventListener("touchend", (e) => {
+      if (e.target.closest(".actions-row")) return;
+      const touch = e.changedTouches[0];
+      const dx = touch.clientX - startX;
+      const dy = touch.clientY - startY;
+      if (Math.abs(dx) <= Math.abs(dy)) return;
+      if (dx < -56) row.classList.add("reveal");
+      if (dx > 28) row.classList.remove("reveal");
+    }, { passive: true });
   });
 }
 function renderTaxBreakdown() {

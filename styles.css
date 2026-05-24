@@ -301,15 +301,16 @@ input:focus, select:focus {
 .kpi-tone-5 { background: linear-gradient(160deg,#ece6ff,#ddd2ff); }
 .dashboard-detail-card { background: rgba(255,255,255,0.82); border: 1px solid var(--line); border-radius: 20px; padding: 16px; box-shadow: var(--shadow); width: 100%; overflow: hidden; }
 
-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.88rem; display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }
+table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.88rem; display: block; overflow-x: auto; overflow-y: visible; -webkit-overflow-scrolling: touch; white-space: nowrap; touch-action: auto; }
 th, td { border-bottom: 1px solid rgba(216, 226, 237, 0.9); text-align: left; padding: 10px 8px; }
 th { color: var(--muted); font-weight: 700; }
 .del { color: #b91c1c; background: transparent; border: 0; cursor: pointer; font-weight: 700; }
 .edit { color: #1d4ed8; background: transparent; border: 0; cursor: pointer; font-weight: 700; }
 .actions-row { display: inline-flex; gap: 8px; }
+.actions-row button { touch-action: manipulation; }
 .action-cell { white-space: nowrap; }
 
-.swipe-row { touch-action: pan-y; transition: transform .18s ease; }
+.swipe-row { touch-action: auto; transition: transform .18s ease; }
 .swipe-row.reveal .action-cell { background: #fff6f6; }
 .swipe-row.reveal .action-cell .actions-row { transform: translateX(0); opacity: 1; }
 .action-cell .actions-row { transform: translateX(14px); opacity: .5; transition: all .16s ease; }
