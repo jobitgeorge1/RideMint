@@ -35,7 +35,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-25b (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-25c (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -882,7 +882,7 @@ function renderTollTable() {
 function renderKpis() {
   const m = computeMetrics();
   const cards = [
-    ["Trip Gross Fare", aud(m.fareGross), "kpi-tone-1"],
+    ["Net Fare", aud(m.netFare), "kpi-tone-1"],
     ["Uber Trip KM", f2(m.businessKm), "kpi-tone-2"],
     ["Tip / Extra", aud(m.tipExtra), "kpi-tone-2"],
     ["Tolls Tracked", aud(m.tollTotal), "kpi-tone-4"],
@@ -931,6 +931,7 @@ function computeMetrics(overrides = {}) {
   const tipExtra = db.fares.reduce((a, x) => a + n(x.tip_extra), 0);
   const platformFees = db.fares.reduce((a, x) => a + n(x.platform_fee), 0);
   const platformFeeGst = db.fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
+  const netFare = round2(fareGross - tipExtra - platformFees);
   const netPayout = db.fares.reduce((a, x) => a + netPayoutForFare(x), 0);
   const totalKm = sum(db.trips, "km");
   const businessKm = db.trips.reduce((a, x) => a + (x.purpose === "Business" ? Number(x.km) : 0), 0);
@@ -966,6 +967,7 @@ function computeMetrics(overrides = {}) {
     fareGross,
     fareGst,
     tipExtra,
+    netFare,
     expenseTotal,
     expenseGstCredit,
     tollTotal,
@@ -1543,6 +1545,7 @@ function computeForRange(from, to) {
   const tipExtra = fares.reduce((a, x) => a + n(x.tip_extra), 0);
   const platformFees = fares.reduce((a, x) => a + n(x.platform_fee), 0);
   const platformFeeGst = fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
+  const netFare = round2(fareGross - tipExtra - platformFees);
   const netPayout = fares.reduce((a, x) => a + netPayoutForFare(x), 0);
   const expenseTotal = sum(expenses, "amount");
   const tollTotal = sum(tolls, "amount");
@@ -1569,6 +1572,7 @@ function computeForRange(from, to) {
   return {
     fareGross,
     tipExtra,
+    netFare,
     expenseTotal,
     netPayout,
     platformFees,
