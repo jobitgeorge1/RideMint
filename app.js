@@ -19,6 +19,7 @@ let editing = { trips: null, fares: null, expenses: null, tolls: null };
 let activeTab = "dashboard";
 let activeReportKind = "executive";
 let rowActionDelegatesBound = false;
+let lastRefreshAt = 0;
 
 const el = (id) => document.getElementById(id);
 
@@ -34,7 +35,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-25a (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-25b (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -88,6 +89,7 @@ function wireEvents() {
   bindExpenseGstCalc();
   bindReportSwitcher();
   bindRowActionDelegates();
+  bindAutoRefresh();
 }
 
 function bindReportSwitcher() {
@@ -227,8 +229,20 @@ async function initSupabase(url, anon) {
     const { data, error } = await supabase.auth.getSession();
     if (error) throw error;
     currentUser = data?.session?.user || null;
+    supabase.auth.onAuthStateChange(async (_event, session) => {
+      currentUser = session?.user || null;
+      if (currentUser) {
+        await refreshAll(true);
+      } else {
+        currentProfile = null;
+        isAdmin = false;
+        db = { trips: [], fares: [], expenses: [], tolls: [], tax: null, platforms: [] };
+        renderAll();
+      }
+      toggleApp();
+    });
     toggleApp();
-    if (currentUser) await refreshAll();
+    if (currentUser) await refreshAll(true);
     return true;
   } catch (err) {
     const msg = err?.message || "Could not initialize Supabase.";
@@ -361,7 +375,10 @@ function updateSectionHeader(key) {
   if (el("sectionSubtitle")) el("sectionSubtitle").textContent = sub;
 }
 
-async function refreshAll() {
+async function refreshAll(force = false) {
+  const now = Date.now();
+  if (!force && now - lastRefreshAt < 2000) return;
+  lastRefreshAt = now;
   await loadProfile();
   applyAdminVisibility();
   await Promise.all([loadTable("trips"), loadTable("fares"), loadTable("expenses"), loadTable("tolls"), loadTax(), loadPlatformOptions()]);
@@ -1902,7 +1919,39 @@ function downloadFile(name, content, type) {
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js").then((registration) => {
+      registration.update().catch(() => {});
+      if (registration.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" });
+      registration.addEventListener("updatefound", () => {
+        const worker = registration.installing;
+        if (!worker) return;
+        worker.addEventListener("statechange", () => {
+          if (worker.state === "installed" && navigator.serviceWorker.controller) {
+            worker.postMessage({ type: "SKIP_WAITING" });
+          }
+        });
+      });
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (window.__RIDEMINT_RELOADING__) return;
+        window.__RIDEMINT_RELOADING__ = true;
+        window.location.reload();
+      });
+    }).catch(() => {});
   });
+}
+
+function bindAutoRefresh() {
+  window.addEventListener("focus", () => {
+    if (currentUser) refreshAll(true);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && currentUser) refreshAll(true);
+  });
+  window.addEventListener("online", () => {
+    if (currentUser) refreshAll(true);
+  });
+  window.setInterval(() => {
+    if (currentUser && !document.hidden) refreshAll(true);
+  }, 30000);
 }
 })();
