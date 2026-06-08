@@ -14,7 +14,7 @@ let supabase = null;
 let currentUser = null;
 let currentProfile = null;
 let isAdmin = false;
-let db = { trips: [], fares: [], expenses: [], tolls: [], tax: null, platforms: [] };
+let db = { trips: [], fares: [], expenses: [], tolls: [], receipts: [], tax: null, platforms: [] };
 let editing = { trips: null, fares: null, expenses: null, tolls: null };
 let activeTab = "dashboard";
 let activeReportKind = "executive";
@@ -35,7 +35,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-05-25d (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-08a (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -43,6 +43,7 @@ function boot() {
     if (f?.date) f.date.value = today;
   });
   if (el("fareForm")?.date) el("fareForm").date.value = weekRange(today).start;
+  if (el("receiptDate")) el("receiptDate").value = today;
   if (el("summaryYear")) el("summaryYear").value = new Date().getFullYear();
   wireEvents();
   setupTabs();
@@ -79,6 +80,8 @@ function wireEvents() {
   bindClick("refreshPlatformsBtn", loadPlatformOptions);
   bindClick("importWorkbookBtn", importWorkbook);
   bindClick("clearAllDataBtn", clearAllAccountData);
+  bindClick("downloadAllReceiptsBtn", downloadAllReceiptsPdf);
+  el("receiptScanInput")?.addEventListener("change", onReceiptSelected);
   bindClick("tripCancelEditBtn", () => clearEdit("trips"));
   bindClick("fareCancelEditBtn", () => clearEdit("fares"));
   bindClick("expenseCancelEditBtn", () => clearEdit("expenses"));
@@ -236,7 +239,7 @@ async function initSupabase(url, anon) {
       } else {
         currentProfile = null;
         isAdmin = false;
-        db = { trips: [], fares: [], expenses: [], tolls: [], tax: null, platforms: [] };
+        db = { trips: [], fares: [], expenses: [], tolls: [], receipts: [], tax: null, platforms: [] };
         renderAll();
       }
       toggleApp();
@@ -324,7 +327,7 @@ async function logout() {
   currentUser = null;
   currentProfile = null;
   isAdmin = false;
-  db = { trips: [], fares: [], expenses: [], tolls: [], tax: null, platforms: [] };
+  db = { trips: [], fares: [], expenses: [], tolls: [], receipts: [], tax: null, platforms: [] };
   editing = { trips: null, fares: null, expenses: null, tolls: null };
   toggleApp();
   renderAll();
@@ -381,7 +384,7 @@ async function refreshAll(force = false) {
   lastRefreshAt = now;
   await loadProfile();
   applyAdminVisibility();
-  await Promise.all([loadTable("trips"), loadTable("fares"), loadTable("expenses"), loadTable("tolls"), loadTax(), loadPlatformOptions()]);
+  await Promise.all([loadTable("trips"), loadTable("fares"), loadTable("expenses"), loadTable("tolls"), loadTable("receipts"), loadTax(), loadPlatformOptions()]);
   prefillTripStartOdo();
   renderAll();
   if (isAdmin) {
@@ -440,7 +443,8 @@ async function updateUserRole() {
 }
 
 async function loadTable(table) {
-  const { data, error } = await supabase.from(table).select("*").order("date", { ascending: false });
+  const orderColumn = table === "receipts" ? "receipt_date" : "date";
+  const { data, error } = await supabase.from(table).select("*").order(orderColumn, { ascending: false });
   if (error) return;
   db[table] = data || [];
 }
@@ -830,7 +834,7 @@ async function onSaveTax(e) {
 }
 
 function renderAll() {
-  renderTripTable(); renderLogbookSummary(); renderFareWeeklyTable(); renderExpenseTable(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
+  renderTripTable(); renderLogbookSummary(); renderFareWeeklyTable(); renderExpenseTable(); renderReceiptGrid(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
   updateAutoTaxPct();
 }
 
@@ -871,6 +875,26 @@ function renderExpenseTable() {
   );
   bindRowActions();
 }
+
+function renderReceiptGrid() {
+  const grid = el("receiptGrid");
+  if (!grid) return;
+  const rows = db.receipts || [];
+  grid.innerHTML = rows.length ? rows.map((receipt) => `
+    <article class="receipt-card">
+      <img src="${receipt.image_data}" alt="${esc(receipt.title || "Receipt")}" />
+      <div class="receipt-info">
+        <strong>${esc(receipt.title || "Receipt")}</strong>
+        <span>${esc(receipt.receipt_date || receipt.created_at?.slice(0, 10) || "")}</span>
+      </div>
+      <div class="actions-row">
+        <button type="button" class="receipt-pdf" data-id="${receipt.id}">PDF</button>
+        ${delBtn("receipts", receipt.id)}
+      </div>
+    </article>
+  `).join("") : `<div class="empty-chart">No receipts saved yet.</div>`;
+}
+
 function renderTollTable() {
   el("tollTable").innerHTML = tableHtml(
     ["Date", "Amount", "Reimbursed", "Actions"],
@@ -879,18 +903,106 @@ function renderTollTable() {
   bindRowActions();
 }
 
+async function onReceiptSelected(evt) {
+  if (!currentUser || !supabase) return setStatus("receiptStatus", "Login required.", true);
+  const file = evt.target.files?.[0];
+  if (!file) return;
+  setStatus("receiptStatus", "Scanning receipt...");
+  try {
+    const imageData = await scanReceiptImage(file);
+    const title = (el("receiptTitle")?.value || file.name || "Receipt").trim();
+    const receiptDate = el("receiptDate")?.value || today;
+    const { error } = await supabase.from("receipts").insert({
+      user_id: currentUser.id,
+      receipt_date: receiptDate,
+      title,
+      image_data: imageData
+    });
+    if (error) throw error;
+    if (el("receiptTitle")) el("receiptTitle").value = "";
+    if (el("receiptScanInput")) el("receiptScanInput").value = "";
+    setStatus("receiptStatus", "Receipt scanned and saved.");
+    await refreshAll(true);
+  } catch (err) {
+    setStatus("receiptStatus", `Receipt save failed: ${err?.message || "Unknown error"}`, true);
+  }
+}
+
+async function scanReceiptImage(file) {
+  const bitmap = await loadReceiptBitmap(file);
+  const maxSide = 1600;
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const crop = detectReceiptBounds(ctx, canvas.width, canvas.height);
+  const out = document.createElement("canvas");
+  out.width = crop.w;
+  out.height = crop.h;
+  out.getContext("2d").drawImage(canvas, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+  return out.toDataURL("image/jpeg", 0.82);
+}
+
+function loadReceiptBitmap(file) {
+  if ("createImageBitmap" in window) return createImageBitmap(file);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(img.src);
+      resolve(img);
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function detectReceiptBounds(ctx, width, height) {
+  const data = ctx.getImageData(0, 0, width, height).data;
+  const sample = (x, y) => {
+    const i = (y * width + x) * 4;
+    return [data[i], data[i + 1], data[i + 2]];
+  };
+  const corners = [sample(0, 0), sample(width - 1, 0), sample(0, height - 1), sample(width - 1, height - 1)];
+  const bg = corners.reduce((a, c) => [a[0] + c[0] / 4, a[1] + c[1] / 4, a[2] + c[2] / 4], [0, 0, 0]);
+  let minX = width, minY = height, maxX = 0, maxY = 0;
+  for (let y = 0; y < height; y += 4) {
+    for (let x = 0; x < width; x += 4) {
+      const i = (y * width + x) * 4;
+      const diff = Math.abs(data[i] - bg[0]) + Math.abs(data[i + 1] - bg[1]) + Math.abs(data[i + 2] - bg[2]);
+      const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      if (diff > 70 && brightness > 35) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  const foundArea = Math.max(0, maxX - minX) * Math.max(0, maxY - minY);
+  if (foundArea < width * height * 0.12) return { x: 0, y: 0, w: width, h: height };
+  const pad = Math.round(Math.min(width, height) * 0.03);
+  const x = Math.max(0, minX - pad);
+  const y = Math.max(0, minY - pad);
+  const right = Math.min(width, maxX + pad);
+  const bottom = Math.min(height, maxY + pad);
+  return { x, y, w: right - x, h: bottom - y };
+}
+
 function renderKpis() {
   const m = computeMetrics();
   const cards = [
-    ["Fare After Uber Fee", aud(m.fareAfterUberFee), "kpi-tone-1"],
-    ["Uber Trip KM", f2(m.businessKm), "kpi-tone-2"],
-    ["Tip / Extra", aud(m.tipExtra), "kpi-tone-2"],
-    ["Tolls Tracked", aud(m.tollTotal), "kpi-tone-4"],
     ["Net Payout", aud(m.netPayout), "kpi-tone-3"],
-    ["GST Payable", aud(m.gstPayable), "kpi-tone-4"],
-    ["Income Tax Payable", aud(m.uberTaxPayable), "kpi-tone-5"],
     ["In Hand", aud(m.inHand), "kpi-tone-2"],
-    ["Expenses", aud(m.expenseTotal), "kpi-tone-3"]
+    ["Fare After Fee", aud(m.fareAfterUberFee), "kpi-tone-1"],
+    ["Tip / Extra", aud(m.tipExtra), "kpi-tone-2"],
+    ["Income Tax Payable", aud(m.uberTaxPayable), "kpi-tone-5"],
+    ["GST Payable", aud(m.gstPayable), "kpi-tone-4"],
+    ["Tolls Tracked", aud(m.tollTotal), "kpi-tone-4"],
+    ["Expenses", aud(m.expenseTotal), "kpi-tone-3"],
+    ["Uber Trip KM", f2(m.businessKm), "kpi-tone-2"],
+    ["Personal Trip KM", f2(m.personalKm), "kpi-tone-5"]
   ];
   el("kpiGrid").innerHTML = cards.map(([k, v, tone]) => `<article class="kpi ${tone}"><div class="key">${k}</div><div class="val">${v}</div></article>`).join("");
 }
@@ -907,7 +1019,7 @@ function renderDashboardHero() {
       <div class="hero-chip"><span>This Week</span><strong>${week ? aud(week.netPayout) : aud(0)}</strong></div>
       <div class="hero-chip"><span>GST Payable</span><strong>${aud(m.gstPayable)}</strong></div>
       <div class="hero-chip"><span>Income Tax Payable</span><strong>${aud(m.uberTaxPayable)}</strong></div>
-      <div class="hero-chip"><span>Tolls Tracked</span><strong>${aud(m.tollTotal)}</strong></div>
+      <div class="hero-chip"><span>In Hand</span><strong>${aud(m.inHand)}</strong></div>
     </div>
   `;
 }
@@ -935,6 +1047,7 @@ function computeMetrics(overrides = {}) {
   const netPayout = db.fares.reduce((a, x) => a + netPayoutForFare(x), 0);
   const totalKm = sum(db.trips, "km");
   const businessKm = db.trips.reduce((a, x) => a + (x.purpose === "Business" ? Number(x.km) : 0), 0);
+  const personalKm = Math.max(0, totalKm - businessKm);
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
   const expenseTotal = sum(db.expenses, "amount");
   const expenseGstCredit = db.expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0) + platformFeeGst;
@@ -974,6 +1087,7 @@ function computeMetrics(overrides = {}) {
     reimbursedTolls,
     totalKm,
     businessKm,
+    personalKm,
     businessUsePct,
     rideshareTaxableIncome,
     taxableIncome,
@@ -1663,6 +1777,13 @@ function bindRowActionDelegates() {
       const { error } = await supabase.from(table).delete().eq("id", id);
       if (error) return alert(`Delete failed: ${error.message}`);
       await refreshAll();
+      return;
+    }
+    const receiptPdfButton = evt.target.closest(".receipt-pdf");
+    if (receiptPdfButton) {
+      evt.preventDefault();
+      const receipt = db.receipts.find((x) => x.id === receiptPdfButton.dataset.id);
+      if (receipt) await downloadReceiptsPdf([receipt], `ridemint-receipt-${receipt.receipt_date || today}.pdf`);
     }
   });
 }
@@ -1860,7 +1981,7 @@ async function clearAllAccountData() {
   }
   if (!window.confirm("Final confirmation: delete all data for this account?")) return;
   setStatus("clearAllStatus", "Clearing account data...");
-  const tables = ["trips", "fares", "expenses", "tolls", "tax_settings"];
+  const tables = ["trips", "fares", "expenses", "tolls", "receipts", "tax_settings"];
   for (const table of tables) {
     const { error } = await supabase.from(table).delete().eq("user_id", currentUser.id);
     if (error) return setStatus("clearAllStatus", `Delete failed in ${table}: ${error.message}`, true);
@@ -1918,6 +2039,47 @@ function downloadFile(name, content, type) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+async function downloadAllReceiptsPdf() {
+  const receipts = db.receipts || [];
+  if (!receipts.length) return setStatus("receiptStatus", "No receipts to download.", true);
+  await downloadReceiptsPdf(receipts, `ridemint-receipts-${today}.pdf`);
+}
+
+async function downloadReceiptsPdf(receipts, fileName) {
+  const JsPdf = window.jspdf?.jsPDF;
+  if (!JsPdf) return setStatus("receiptStatus", "PDF library is still loading. Try again in a moment.", true);
+  setStatus("receiptStatus", "Preparing receipt PDF...");
+  const doc = new JsPdf({ unit: "pt", format: "a4" });
+  for (let i = 0; i < receipts.length; i += 1) {
+    if (i > 0) doc.addPage();
+    const receipt = receipts[i];
+    const dims = await imageDimensions(receipt.image_data);
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 36;
+    const title = `${receipt.title || "Receipt"} - ${receipt.receipt_date || ""}`;
+    doc.setFontSize(12);
+    doc.text(title, margin, 24);
+    const maxW = pageW - margin * 2;
+    const maxH = pageH - margin * 2 - 20;
+    const ratio = Math.min(maxW / dims.width, maxH / dims.height);
+    const w = dims.width * ratio;
+    const h = dims.height * ratio;
+    doc.addImage(receipt.image_data, "JPEG", (pageW - w) / 2, 44, w, h);
+  }
+  doc.save(fileName);
+  setStatus("receiptStatus", "Receipt PDF downloaded.");
+}
+
+function imageDimensions(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth || img.width, height: img.naturalHeight || img.height });
+    img.onerror = reject;
+    img.src = src;
+  });
 }
 
 function registerServiceWorker() {

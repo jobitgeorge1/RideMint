@@ -73,6 +73,15 @@ create table if not exists tolls (
   created_at timestamptz default now()
 );
 
+create table if not exists receipts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  receipt_date date not null default current_date,
+  title text not null default 'Receipt',
+  image_data text not null,
+  created_at timestamptz default now()
+);
+
 create table if not exists tax_settings (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null unique references auth.users(id) on delete cascade,
@@ -111,6 +120,7 @@ alter table trips enable row level security;
 alter table fares enable row level security;
 alter table expenses enable row level security;
 alter table tolls enable row level security;
+alter table receipts enable row level security;
 alter table tax_settings enable row level security;
 alter table profiles enable row level security;
 alter table platform_options enable row level security;
@@ -149,6 +159,11 @@ drop policy if exists "tolls owner write" on tolls;
 create policy "tolls owner read" on tolls for select using (auth.uid() = user_id);
 create policy "tolls owner write" on tolls for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists "receipts owner read" on receipts;
+drop policy if exists "receipts owner write" on receipts;
+create policy "receipts owner read" on receipts for select using (auth.uid() = user_id);
+create policy "receipts owner write" on receipts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
 drop policy if exists "tax owner read" on tax_settings;
 drop policy if exists "tax owner write" on tax_settings;
 create policy "tax owner read" on tax_settings for select using (auth.uid() = user_id);
@@ -178,6 +193,7 @@ create index if not exists trips_user_date_idx on trips(user_id, date desc);
 create index if not exists fares_user_date_idx on fares(user_id, date desc);
 create index if not exists expenses_user_date_idx on expenses(user_id, date desc);
 create index if not exists tolls_user_date_idx on tolls(user_id, date desc);
+create index if not exists receipts_user_date_idx on receipts(user_id, receipt_date desc);
 
 create or replace function public.handle_new_user()
 returns trigger

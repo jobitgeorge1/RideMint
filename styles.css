@@ -37,6 +37,12 @@ body {
 .hero h1 { margin: 0; font-size: 1.85rem; letter-spacing: -0.03em; }
 .hero p { margin: 6px 0 0; color: #d6e5f1; }
 .hero-actions { display: flex; gap: 8px; }
+.app-footer {
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-align: center;
+  padding: 18px 8px 4px;
+}
 .card {
   background: var(--surface);
   border: 1px solid rgba(214, 225, 238, 0.95);
@@ -300,6 +306,53 @@ input:focus, select:focus {
 .kpi-tone-4 { background: linear-gradient(160deg,#ffe0e5,#ffc8d4); }
 .kpi-tone-5 { background: linear-gradient(160deg,#ece6ff,#ddd2ff); }
 .dashboard-detail-card { background: rgba(255,255,255,0.82); border: 1px solid var(--line); border-radius: 20px; padding: 16px; box-shadow: var(--shadow); width: 100%; overflow: hidden; }
+.receipt-vault {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.receipt-card {
+  background: rgba(255,255,255,0.9);
+  border: 1px solid #d8e3ee;
+  border-radius: 16px;
+  padding: 10px;
+  box-shadow: 0 10px 22px rgba(17, 40, 68, 0.07);
+}
+.receipt-card img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 12px;
+  background: #eef4fb;
+  border: 1px solid #e0e8f1;
+}
+.receipt-info {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0;
+}
+.receipt-info strong {
+  color: var(--ink);
+  font-size: 0.86rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.receipt-info span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+.receipt-pdf {
+  color: #0f766e;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-weight: 700;
+}
 
 table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.88rem; display: block; overflow-x: auto; overflow-y: visible; -webkit-overflow-scrolling: touch; white-space: nowrap; touch-action: auto; }
 th, td { border-bottom: 1px solid rgba(216, 226, 237, 0.9); text-align: left; padding: 10px 8px; }
@@ -598,6 +651,9 @@ th { color: var(--muted); font-weight: 700; }
   .dashboard-detail-card {
     padding: 14px;
     border-radius: 18px;
+  }
+  .receipt-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   #dashboardWeeklyTable {
     font-size: 0.8rem;

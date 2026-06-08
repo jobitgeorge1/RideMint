@@ -15,14 +15,14 @@
   <link rel="stylesheet" href="./styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 </head>
 <body>
   <div class="page-shell">
     <header class="hero">
       <div>
         <h1>RideMint Ledger Pro</h1>
-        <p>Professional rideshare finance app for logbook, GST, BAS, and tax summaries.</p>
-        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-05-16b</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-06-08a</p>
       </div>
       <div class="hero-actions" id="topActions">
         <button id="printReportBtn" class="btn secondary hidden">Download Report</button>
@@ -176,6 +176,22 @@
             <button class="btn secondary full hidden" id="expenseCancelEditBtn" type="button">Cancel Edit</button>
           </form>
           <table id="expenseTable"></table>
+          <div class="section-block receipt-vault">
+            <div class="section-head">
+              <h3>Receipt Vault</h3>
+              <p>Scan or upload expense receipts, keep them with your account, and download PDF copies when needed.</p>
+            </div>
+            <div class="form-grid single">
+              <div><label>Receipt Date</label><input id="receiptDate" type="date" /></div>
+              <div><label>Receipt Title</label><input id="receiptTitle" placeholder="Fuel receipt, car wash, service invoice" /></div>
+              <div><label>Scan / Upload Receipt</label><input id="receiptScanInput" type="file" accept="image/*" capture="environment" /></div>
+            </div>
+            <div class="row">
+              <button id="downloadAllReceiptsBtn" class="btn secondary" type="button">Download All Receipts PDF</button>
+            </div>
+            <div class="status" id="receiptStatus"></div>
+            <div class="receipt-grid" id="receiptGrid"></div>
+          </div>
         </article>
       </section>
 
@@ -297,6 +313,7 @@
         </section>
       </main>
     </section>
+    <footer class="app-footer">Professional rideshare finance app for logbook, GST, BAS, and tax summaries.</footer>
   </div>
 
   <script src="./config.js"></script>
