@@ -15,14 +15,14 @@
   <link rel="stylesheet" href="./styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 </head>
 <body>
   <div class="page-shell">
     <header class="hero">
       <div>
         <h1>RideMint Ledger Pro</h1>
-        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-06-08a</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-06-08b</p>
       </div>
       <div class="hero-actions" id="topActions">
         <button id="printReportBtn" class="btn secondary hidden">Download Report</button>
@@ -184,7 +184,8 @@
             <div class="form-grid single">
               <div><label>Receipt Date</label><input id="receiptDate" type="date" /></div>
               <div><label>Receipt Title</label><input id="receiptTitle" placeholder="Fuel receipt, car wash, service invoice" /></div>
-              <div><label>Scan / Upload Receipt</label><input id="receiptScanInput" type="file" accept="image/*" capture="environment" /></div>
+              <div><label>Take Photo</label><input id="receiptCameraInput" type="file" accept="image/*" capture="environment" /></div>
+              <div><label>Upload From Gallery or Computer</label><input id="receiptUploadInput" type="file" accept="image/*,.pdf,application/pdf" /></div>
             </div>
             <div class="row">
               <button id="downloadAllReceiptsBtn" class="btn secondary" type="button">Download All Receipts PDF</button>

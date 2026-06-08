@@ -35,7 +35,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-08a (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-08b (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -81,7 +81,8 @@ function wireEvents() {
   bindClick("importWorkbookBtn", importWorkbook);
   bindClick("clearAllDataBtn", clearAllAccountData);
   bindClick("downloadAllReceiptsBtn", downloadAllReceiptsPdf);
-  el("receiptScanInput")?.addEventListener("change", onReceiptSelected);
+  el("receiptCameraInput")?.addEventListener("change", onReceiptSelected);
+  el("receiptUploadInput")?.addEventListener("change", onReceiptSelected);
   bindClick("tripCancelEditBtn", () => clearEdit("trips"));
   bindClick("fareCancelEditBtn", () => clearEdit("fares"));
   bindClick("expenseCancelEditBtn", () => clearEdit("expenses"));
@@ -882,7 +883,9 @@ function renderReceiptGrid() {
   const rows = db.receipts || [];
   grid.innerHTML = rows.length ? rows.map((receipt) => `
     <article class="receipt-card">
-      <img src="${receipt.image_data}" alt="${esc(receipt.title || "Receipt")}" />
+      ${isPdfReceipt(receipt) ?
+        `<div class="receipt-pdf-preview"><strong>PDF</strong><span>Receipt document</span></div>` :
+        `<img src="${receipt.image_data}" alt="${esc(receipt.title || "Receipt")}" />`}
       <div class="receipt-info">
         <strong>${esc(receipt.title || "Receipt")}</strong>
         <span>${esc(receipt.receipt_date || receipt.created_at?.slice(0, 10) || "")}</span>
@@ -907,25 +910,44 @@ async function onReceiptSelected(evt) {
   if (!currentUser || !supabase) return setStatus("receiptStatus", "Login required.", true);
   const file = evt.target.files?.[0];
   if (!file) return;
+  if (file.size > 8 * 1024 * 1024) {
+    evt.target.value = "";
+    return setStatus("receiptStatus", "Receipt file must be 8 MB or smaller.", true);
+  }
   setStatus("receiptStatus", "Scanning receipt...");
   try {
-    const imageData = await scanReceiptImage(file);
+    const receiptData = file.type === "application/pdf" || /\.pdf$/i.test(file.name)
+      ? await fileToDataUrl(file)
+      : await scanReceiptImage(file);
     const title = (el("receiptTitle")?.value || file.name || "Receipt").trim();
     const receiptDate = el("receiptDate")?.value || today;
     const { error } = await supabase.from("receipts").insert({
       user_id: currentUser.id,
       receipt_date: receiptDate,
       title,
-      image_data: imageData
+      image_data: receiptData
     });
     if (error) throw error;
     if (el("receiptTitle")) el("receiptTitle").value = "";
-    if (el("receiptScanInput")) el("receiptScanInput").value = "";
-    setStatus("receiptStatus", "Receipt scanned and saved.");
+    evt.target.value = "";
+    setStatus("receiptStatus", file.type === "application/pdf" ? "Receipt PDF saved." : "Receipt scanned and saved.");
     await refreshAll(true);
   } catch (err) {
     setStatus("receiptStatus", `Receipt save failed: ${err?.message || "Unknown error"}`, true);
   }
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function isPdfReceipt(receipt) {
+  return String(receipt?.image_data || "").startsWith("data:application/pdf");
 }
 
 async function scanReceiptImage(file) {
@@ -1783,7 +1805,7 @@ function bindRowActionDelegates() {
     if (receiptPdfButton) {
       evt.preventDefault();
       const receipt = db.receipts.find((x) => x.id === receiptPdfButton.dataset.id);
-      if (receipt) await downloadReceiptsPdf([receipt], `ridemint-receipt-${receipt.receipt_date || today}.pdf`);
+      if (receipt) await downloadSingleReceipt(receipt);
     }
   });
 }
@@ -2047,39 +2069,82 @@ async function downloadAllReceiptsPdf() {
   await downloadReceiptsPdf(receipts, `ridemint-receipts-${today}.pdf`);
 }
 
-async function downloadReceiptsPdf(receipts, fileName) {
-  const JsPdf = window.jspdf?.jsPDF;
-  if (!JsPdf) return setStatus("receiptStatus", "PDF library is still loading. Try again in a moment.", true);
-  setStatus("receiptStatus", "Preparing receipt PDF...");
-  const doc = new JsPdf({ unit: "pt", format: "a4" });
-  for (let i = 0; i < receipts.length; i += 1) {
-    if (i > 0) doc.addPage();
-    const receipt = receipts[i];
-    const dims = await imageDimensions(receipt.image_data);
-    const pageW = doc.internal.pageSize.getWidth();
-    const pageH = doc.internal.pageSize.getHeight();
-    const margin = 36;
-    const title = `${receipt.title || "Receipt"} - ${receipt.receipt_date || ""}`;
-    doc.setFontSize(12);
-    doc.text(title, margin, 24);
-    const maxW = pageW - margin * 2;
-    const maxH = pageH - margin * 2 - 20;
-    const ratio = Math.min(maxW / dims.width, maxH / dims.height);
-    const w = dims.width * ratio;
-    const h = dims.height * ratio;
-    doc.addImage(receipt.image_data, "JPEG", (pageW - w) / 2, 44, w, h);
+async function downloadSingleReceipt(receipt) {
+  if (isPdfReceipt(receipt)) {
+    downloadDataUrl(
+      receipt.image_data,
+      `${safeFileName(receipt.title || "receipt")}-${receipt.receipt_date || today}.pdf`
+    );
+    return;
   }
-  doc.save(fileName);
-  setStatus("receiptStatus", "Receipt PDF downloaded.");
+  await downloadReceiptsPdf([receipt], `ridemint-receipt-${receipt.receipt_date || today}.pdf`);
 }
 
-function imageDimensions(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve({ width: img.naturalWidth || img.width, height: img.naturalHeight || img.height });
-    img.onerror = reject;
-    img.src = src;
-  });
+async function downloadReceiptsPdf(receipts, fileName) {
+  const PdfDocument = window.PDFLib?.PDFDocument;
+  if (!PdfDocument) return setStatus("receiptStatus", "PDF library is still loading. Try again in a moment.", true);
+  setStatus("receiptStatus", "Preparing receipt PDF...");
+  try {
+    const output = await PdfDocument.create();
+    for (const receipt of receipts) {
+      if (isPdfReceipt(receipt)) {
+        const source = await PdfDocument.load(dataUrlBytes(receipt.image_data));
+        const pages = await output.copyPages(source, source.getPageIndices());
+        pages.forEach((page) => output.addPage(page));
+        continue;
+      }
+      const image = await output.embedJpg(dataUrlBytes(receipt.image_data));
+      const page = output.addPage([595.28, 841.89]);
+      const margin = 36;
+      const maxW = page.getWidth() - margin * 2;
+      const maxH = page.getHeight() - margin * 2 - 24;
+      const ratio = Math.min(maxW / image.width, maxH / image.height);
+      const width = image.width * ratio;
+      const height = image.height * ratio;
+      page.drawText(`${receipt.title || "Receipt"} - ${receipt.receipt_date || ""}`, {
+        x: margin,
+        y: page.getHeight() - 28,
+        size: 11
+      });
+      page.drawImage(image, {
+        x: (page.getWidth() - width) / 2,
+        y: page.getHeight() - 48 - height,
+        width,
+        height
+      });
+    }
+    const bytes = await output.save();
+    downloadBlob(new Blob([bytes], { type: "application/pdf" }), fileName);
+    setStatus("receiptStatus", "Receipt PDF downloaded.");
+  } catch (err) {
+    setStatus("receiptStatus", `PDF creation failed: ${err?.message || "Unknown error"}`, true);
+  }
+}
+
+function dataUrlBytes(dataUrl) {
+  const base64 = String(dataUrl).split(",")[1] || "";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function downloadDataUrl(dataUrl, fileName) {
+  const mime = String(dataUrl).match(/^data:([^;,]+)/)?.[1] || "application/octet-stream";
+  downloadBlob(new Blob([dataUrlBytes(dataUrl)], { type: mime }), fileName);
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function safeFileName(value) {
+  return String(value).trim().replace(/[^a-z0-9-_]+/gi, "-").replace(/^-+|-+$/g, "") || "receipt";
 }
 
 function registerServiceWorker() {

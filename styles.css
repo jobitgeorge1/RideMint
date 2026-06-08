@@ -331,6 +331,25 @@ input:focus, select:focus {
   background: #eef4fb;
   border: 1px solid #e0e8f1;
 }
+.receipt-pdf-preview {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  text-align: center;
+  border-radius: 12px;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #9f1239;
+}
+.receipt-pdf-preview strong {
+  font-size: 1.35rem;
+}
+.receipt-pdf-preview span {
+  color: #7f1d1d;
+  font-size: 0.76rem;
+}
 .receipt-info {
   display: grid;
   gap: 2px;
