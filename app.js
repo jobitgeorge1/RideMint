@@ -50,7 +50,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-28e (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-28f (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -933,7 +933,7 @@ function renderExpenseSummaryTiles() {
     ["Total Expenses", aud(m.expenseTotal), "kpi-tone-3"],
     ["Business % Amount", aud(m.businessUseExpenseAmount), "kpi-tone-1"],
     ["Expense GST Credit", aud(m.expenseOnlyGstCredit), "kpi-tone-2"],
-    ["Total GST Credit", aud(m.expenseGstCredit), "kpi-tone-4"],
+    ["Platform Fee GST", aud(m.platformFeeGst), "kpi-tone-4"],
     ["Business Use", pct(m.businessUsePct), "kpi-tone-5"],
     ["Vehicle Costs", aud(m.vehicleExpenseTotal), "kpi-tone-1"]
   ];
@@ -1203,7 +1203,7 @@ function computeMetrics(overrides = {}) {
   const expenseTotal = sum(db.expenses, "amount");
   const businessUseExpenseAmount = round2(expenseTotal * businessUsePct);
   const expenseOnlyGstCredit = db.expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0);
-  const expenseGstCredit = expenseOnlyGstCredit + platformFeeGst;
+  const expenseGstCredit = expenseOnlyGstCredit;
   const tollTotal = sum(db.tolls, "amount");
   const reimbursedTolls = db.tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
@@ -1278,6 +1278,7 @@ function computeMetrics(overrides = {}) {
     recommendedReserve,
     effectiveTaxRate,
     platformFees,
+    platformFeeGst,
     marginalRate: slab.rate,
     slabLabel: slab.label
   };
@@ -1398,7 +1399,8 @@ function downloadReportWorkbook(reportType = "full") {
   const basRows = [{
     G1_Total_Sales: round2(allMetrics.fareGross),
     GST_on_Sales_1A: round2(allMetrics.fareGst),
-    GST_Credits_1B: round2(allMetrics.expenseGstCredit),
+    Expense_GST_Credits_1B: round2(allMetrics.expenseGstCredit),
+    Platform_Fee_GST_Info: round2(allMetrics.platformFeeGst || 0),
     Net_GST_Payable: round2(allMetrics.gstPayable)
   }];
   const taxRows = [{
@@ -1462,7 +1464,7 @@ function downloadReportWorkbook(reportType = "full") {
       ["GST Ledger", reportRows.map((row) => ({
         Period: row.Period,
         GST_Collected: row.GST_Collected,
-        GST_Credits: row.GST_Credits,
+        Expense_GST_Credits: row.GST_Credits,
         GST_Payable: row.GST_Payable
       }))],
       ["Fares", fares],
@@ -1631,11 +1633,11 @@ function renderBasReport(period, year, totals, periodRows) {
     <div class="report-kpis">
       ${reportKpi("G1 Total Sales", aud(totals.fareGross))}
       ${reportKpi("1A GST on Sales", aud(totals.fareGst))}
-      ${reportKpi("1B GST Credits", aud(totals.expenseGstCredit))}
+      ${reportKpi("1B Expense GST Credits", aud(totals.expenseGstCredit))}
       ${reportKpi("Net GST Payable", aud(totals.gstPayable))}
     </div>
     <h4>GST Ledger by Period</h4>
-    ${htmlTable(["Period", "GST on Sales", "GST Credits", "GST Payable"], periodRows.map((row) => [row.label, aud(row.fareGst), aud(row.expenseGstCredit), aud(row.gstPayable)]))}
+    ${htmlTable(["Period", "GST on Sales", "Expense GST Credits", "GST Payable"], periodRows.map((row) => [row.label, aud(row.fareGst), aud(row.expenseGstCredit), aud(row.gstPayable)]))}
     <h4>GST Movement Chart</h4>
     ${renderDualBarChart(periodRows.map((row) => ({ label: row.label, left: row.fareGst, right: row.expenseGstCredit })), "Sales GST", "Credits")}
   `;
@@ -1880,7 +1882,7 @@ function computeForRange(from, to) {
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
   const businessUseExpenseAmount = round2(expenseTotal * businessUsePct);
   const expenseOnlyGstCredit = expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0);
-  const expenseGstCredit = expenseOnlyGstCredit + platformFeeGst;
+  const expenseGstCredit = expenseOnlyGstCredit;
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
   const otherIncomeAllocated = allocateAnnualValueToRange(n(db.tax?.other_income || 0), from, to);
   const superAllocated = allocateAnnualValueToRange(n(db.tax?.super_contribution || 0), from, to);
@@ -1912,6 +1914,7 @@ function computeForRange(from, to) {
     expenseTotal,
     netPayout,
     platformFees,
+    platformFeeGst,
     tollTotal,
     reimbursedTolls,
     fareGst,
@@ -2103,7 +2106,8 @@ function renderTaxBreakdown() {
       <strong>GST Position</strong>
       <div class="meta">GST collected from fares versus GST credits from expenses and platform fees.</div>
       ${line("GST on Sales (1A)", aud(m.fareGst))}
-      ${line("GST Credits (1B)", aud(m.expenseGstCredit))}
+      ${line("Expense GST Credits (1B)", aud(m.expenseGstCredit))}
+      ${line("Platform Fee GST (not deducted here)", aud(m.platformFeeGst))}
       ${line("GST Total Payable", aud(m.gstPayable))}
     </div>
     <div class="tax-panel">
