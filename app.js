@@ -8,6 +8,21 @@ window.__RIDEMINT_APP_LOADED__ = true;
 const APP_KEY = "ridemint-pro-config";
 const DEFAULT_SUPABASE_URL = window.RIDEMINT_CONFIG?.SUPABASE_URL || "";
 const DEFAULT_SUPABASE_ANON = window.RIDEMINT_CONFIG?.SUPABASE_ANON_KEY || "";
+const DEFAULT_TAX_SETTINGS = {
+  other_income: 0,
+  super_contribution: 0,
+  deduction_method: "logbook",
+  cents_per_km_rate: 0.88,
+  cents_per_km_cap: 5000
+};
+const VEHICLE_RUNNING_EXPENSE_CATEGORIES = new Set([
+  "fuel",
+  "maintenance",
+  "insurance",
+  "registration",
+  "car wash",
+  "cleaning service"
+]);
 const today = new Date().toISOString().slice(0, 10);
 
 let supabase = null;
@@ -35,7 +50,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-28a (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-28c (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -132,8 +147,12 @@ function bindFareWeekFields() {
 function bindTaxLivePreview() {
   const form = el("taxForm");
   if (!form) return;
-  ["other_income", "super_contribution"].forEach((name) => {
+  ["other_income", "super_contribution", "deduction_method", "cents_per_km_rate", "cents_per_km_cap"].forEach((name) => {
     form[name]?.addEventListener("input", () => {
+      updateAutoTaxPct();
+      renderTaxBreakdown();
+    });
+    form[name]?.addEventListener("change", () => {
       updateAutoTaxPct();
       renderTaxBreakdown();
     });
@@ -451,10 +470,15 @@ async function loadTable(table) {
 }
 
 async function loadTax() {
-  const { data } = await supabase.from("tax_settings").select("*").limit(1).maybeSingle();
-  db.tax = data || { other_income: 0, super_contribution: 0 };
-  el("taxForm").other_income.value = db.tax.other_income || 0;
-  el("taxForm").super_contribution.value = db.tax.super_contribution || 0;
+  const { data, error } = await supabase.from("tax_settings").select("*").limit(1).maybeSingle();
+  if (error) setStatus("taxStatus", `Tax settings load warning: ${error.message}`, true);
+  db.tax = normalizeTaxSettings(data);
+  const form = el("taxForm");
+  form.other_income.value = db.tax.other_income || 0;
+  form.super_contribution.value = db.tax.super_contribution || 0;
+  if (form.deduction_method) form.deduction_method.value = db.tax.deduction_method;
+  if (form.cents_per_km_rate) form.cents_per_km_rate.value = db.tax.cents_per_km_rate;
+  if (form.cents_per_km_cap) form.cents_per_km_cap.value = db.tax.cents_per_km_cap;
 }
 
 function updateAutoTaxPct() {
@@ -822,13 +846,20 @@ async function onSaveTax(e) {
   const payload = {
     user_id: currentUser.id,
     other_income: n(f.other_income.value),
-    super_contribution: n(f.super_contribution.value)
+    super_contribution: n(f.super_contribution.value),
+    deduction_method: validDeductionMethod(f.deduction_method?.value),
+    cents_per_km_rate: n(f.cents_per_km_rate?.value || DEFAULT_TAX_SETTINGS.cents_per_km_rate),
+    cents_per_km_cap: n(f.cents_per_km_cap?.value || DEFAULT_TAX_SETTINGS.cents_per_km_cap)
   };
   const { data } = await supabase.from("tax_settings").select("id").limit(1).maybeSingle();
+  let result;
   if (data?.id) {
-    await supabase.from("tax_settings").update(payload).eq("id", data.id);
+    result = await supabase.from("tax_settings").update(payload).eq("id", data.id);
   } else {
-    await supabase.from("tax_settings").insert(payload);
+    result = await supabase.from("tax_settings").insert(payload);
+  }
+  if (result?.error) {
+    return setStatus("taxStatus", `Tax settings save failed: ${result.error.message}. Run the latest supabase.sql migration if this mentions deduction_method or cents_per_km.`, true);
   }
   setStatus("taxStatus", "Tax settings saved.");
   await refreshAll();
@@ -1017,7 +1048,7 @@ function renderKpis() {
   const cards = [
     ["Net Payout", aud(m.netPayout), "kpi-tone-3"],
     ["Balance", aud(m.balance), "kpi-tone-2"],
-    ["Taxable Income", aud(m.dashboardTaxableIncome), "kpi-tone-1"],
+    ["Rideshare Taxable Income", aud(m.rideshareTaxableIncome), "kpi-tone-1"],
     ["After Tax", aud(m.afterTaxIncome), "kpi-tone-3"],
     ["Fare After Fee", aud(m.fareAfterUberFee), "kpi-tone-1"],
     ["Tip / Extra", aud(m.tipExtra), "kpi-tone-2"],
@@ -1061,6 +1092,61 @@ function renderLogbookSummary() {
   `;
 }
 
+function normalizeTaxSettings(raw = {}) {
+  return {
+    ...DEFAULT_TAX_SETTINGS,
+    ...(raw || {}),
+    other_income: n(raw?.other_income ?? DEFAULT_TAX_SETTINGS.other_income),
+    super_contribution: n(raw?.super_contribution ?? DEFAULT_TAX_SETTINGS.super_contribution),
+    deduction_method: validDeductionMethod(raw?.deduction_method),
+    cents_per_km_rate: n(raw?.cents_per_km_rate ?? DEFAULT_TAX_SETTINGS.cents_per_km_rate),
+    cents_per_km_cap: n(raw?.cents_per_km_cap ?? DEFAULT_TAX_SETTINGS.cents_per_km_cap)
+  };
+}
+
+function validDeductionMethod(value) {
+  return value === "cents_per_km" ? "cents_per_km" : "logbook";
+}
+
+function deductionMethodLabel(value) {
+  return value === "cents_per_km" ? "Cents per Uber kilometre" : "Logbook / business-use actual expenses";
+}
+
+function taxSettingsWithOverrides(overrides = {}) {
+  return normalizeTaxSettings({ ...(db.tax || DEFAULT_TAX_SETTINGS), ...(overrides || {}) });
+}
+
+function isVehicleRunningExpense(row) {
+  return VEHICLE_RUNNING_EXPENSE_CATEGORIES.has(String(row?.category || "").trim().toLowerCase());
+}
+
+function computeDeductionModel({ expenses, businessUsePct, businessKm, superContrib, taxSettings }) {
+  const expenseTotal = sum(expenses, "amount");
+  const vehicleExpenseTotal = expenses.reduce((a, x) => a + (isVehicleRunningExpense(x) ? n(x.amount) : 0), 0);
+  const otherExpenseTotal = Math.max(0, expenseTotal - vehicleExpenseTotal);
+  const cappedBusinessKm = Math.min(Math.max(0, businessKm), Math.max(0, n(taxSettings.cents_per_km_cap)));
+  const centsPerKmDeduction = round2(cappedBusinessKm * Math.max(0, n(taxSettings.cents_per_km_rate)));
+  const logbookDeduction = round2(expenseTotal * businessUsePct);
+  const otherExpenseDeduction = round2(otherExpenseTotal * businessUsePct);
+  const vehicleExpenseDeduction = taxSettings.deduction_method === "cents_per_km"
+    ? centsPerKmDeduction
+    : logbookDeduction;
+  const deductibleExpenses = round2(vehicleExpenseDeduction + (taxSettings.deduction_method === "cents_per_km" ? otherExpenseDeduction : 0) + n(superContrib));
+  return {
+    deductionMethod: taxSettings.deduction_method,
+    vehicleExpenseTotal,
+    otherExpenseTotal,
+    businessUseExpenses: taxSettings.deduction_method === "cents_per_km" ? otherExpenseDeduction : logbookDeduction,
+    vehicleExpenseDeduction,
+    otherExpenseDeduction,
+    centsPerKmDeduction,
+    centsPerKmRate: n(taxSettings.cents_per_km_rate),
+    centsPerKmCap: n(taxSettings.cents_per_km_cap),
+    cappedBusinessKm,
+    deductibleExpenses
+  };
+}
+
 function computeMetrics(overrides = {}) {
   const fareGross = sum(db.fares, "gross");
   const fareGst = db.fares.reduce((a, x) => a + gstFromFare(x), 0);
@@ -1077,12 +1163,13 @@ function computeMetrics(overrides = {}) {
   const expenseGstCredit = db.expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0) + platformFeeGst;
   const tollTotal = sum(db.tolls, "amount");
   const reimbursedTolls = db.tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
-
-  const deductibleExpenses = expenseTotal * businessUsePct + platformFees;
-
-  const otherIncome = n(overrides.other_income ?? db.tax?.other_income ?? 0);
-  const superContrib = n(overrides.super_contribution ?? db.tax?.super_contribution ?? 0);
-  const rideshareTaxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - superContrib);
+  const gstPayable = Math.max(0, fareGst - expenseGstCredit);
+  const taxSettings = taxSettingsWithOverrides(overrides);
+  const otherIncome = n(taxSettings.other_income);
+  const superContrib = n(taxSettings.super_contribution);
+  const deduction = computeDeductionModel({ expenses: db.expenses, businessUsePct, businessKm, superContrib, taxSettings });
+  const deductibleExpenses = deduction.deductibleExpenses;
+  const rideshareTaxableIncome = Math.max(0, netPayout - gstPayable - deductibleExpenses);
   const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncome);
   const taxBreakdown = computeTaxBreakdown(rideshareTaxableIncome, otherIncome);
   const incomeTax = taxBreakdown.incomeTax;
@@ -1092,11 +1179,12 @@ function computeMetrics(overrides = {}) {
   const otherIncomeTaxPaid = taxBreakdown.otherIncomeTaxPaid;
   const slab = taxSlabForIncome(taxableIncome);
 
-  const gstPayable = Math.max(0, fareGst - expenseGstCredit);
-  const dashboardTaxableIncome = Math.max(0, netPayout - gstPayable - expenseTotal);
+  const preTaxBalance = netPayout - gstPayable - expenseTotal;
+  const dashboardTaxableIncome = rideshareTaxableIncome;
   const afterTaxIncome = netPayout - gstPayable - uberTaxPayable;
   const balance = netPayout - gstPayable - uberTaxPayable - expenseTotal;
   const inHand = balance;
+  const rideshareEffectiveTaxRate = rideshareTaxableIncome > 0 ? uberTaxPayable / rideshareTaxableIncome : 0;
 
   const monthsActive = Math.max(1, distinctMonths([...db.fares, ...db.expenses, ...db.tolls].map((x) => x.date)).size);
   const monthlyAvgNet = inHand / monthsActive;
@@ -1116,6 +1204,16 @@ function computeMetrics(overrides = {}) {
     businessKm,
     personalKm,
     businessUsePct,
+    businessUseExpenses: deduction.businessUseExpenses,
+    deductibleExpenses,
+    deductionMethod: deduction.deductionMethod,
+    vehicleExpenseTotal: deduction.vehicleExpenseTotal,
+    vehicleExpenseDeduction: deduction.vehicleExpenseDeduction,
+    otherExpenseDeduction: deduction.otherExpenseDeduction,
+    centsPerKmDeduction: deduction.centsPerKmDeduction,
+    centsPerKmRate: deduction.centsPerKmRate,
+    centsPerKmCap: deduction.centsPerKmCap,
+    cappedBusinessKm: deduction.cappedBusinessKm,
     rideshareTaxableIncome,
     taxableIncome,
     incomeTax,
@@ -1124,10 +1222,12 @@ function computeMetrics(overrides = {}) {
     uberTaxPayable,
     otherIncomeTaxPaid,
     gstPayable,
+    preTaxBalance,
     dashboardTaxableIncome,
     afterTaxIncome,
     balance,
     inHand,
+    rideshareEffectiveTaxRate,
     netPayout,
     monthlyAvgNet,
     recommendedReserve,
@@ -1164,11 +1264,18 @@ function downloadReportWorkbook(reportType = "full") {
       GST_Collected: round2(metrics.fareGst),
       GST_Credits: round2(metrics.expenseGstCredit),
       GST_Payable: round2(metrics.gstPayable),
-      Taxable_Income: round2(metrics.taxableIncome),
+      Deduction_Method: deductionMethodLabel(metrics.deductionMethod),
+      Deductible_Expenses: round2(metrics.deductibleExpenses),
+      Cents_Per_KM_Deduction: round2(metrics.centsPerKmDeduction),
+      Cents_Per_KM_Used: round2(metrics.cappedBusinessKm),
+      Cents_Per_KM_Rate: round2(metrics.centsPerKmRate),
+      Cents_Per_KM_Cap: round2(metrics.centsPerKmCap),
+      Rideshare_Taxable_Income: round2(metrics.rideshareTaxableIncome),
+      Total_Taxable_Income: round2(metrics.taxableIncome),
       Income_Tax_Payable: round2(metrics.uberTaxPayable),
-      PAYG_Tax_Paid: round2(metrics.otherIncomeTaxPaid),
+      Estimated_PAYG_Tax_on_Other_Income: round2(metrics.otherIncomeTaxPaid),
       Tax_Medicare: round2(metrics.totalTax),
-      In_Hand: round2(metrics.inHand)
+      Balance: round2(metrics.balance)
     };
   });
 
@@ -1228,12 +1335,19 @@ function downloadReportWorkbook(reportType = "full") {
     { Field: "Expenses", Value: round2(allMetrics.expenseTotal) },
     { Field: "Business Use %", Value: round2(allMetrics.businessUsePct * 100) },
     { Field: "GST Payable", Value: round2(allMetrics.gstPayable) },
-    { Field: "Taxable Income", Value: round2(allMetrics.taxableIncome) },
+    { Field: "Deduction Method", Value: deductionMethodLabel(allMetrics.deductionMethod) },
+    { Field: "Deductible Expenses", Value: round2(allMetrics.deductibleExpenses) },
+    { Field: "Cents per KM Deduction", Value: round2(allMetrics.centsPerKmDeduction) },
+    { Field: "Cents per KM Used", Value: round2(allMetrics.cappedBusinessKm) },
+    { Field: "Cents per KM Rate", Value: round2(allMetrics.centsPerKmRate) },
+    { Field: "Cents per KM Cap", Value: round2(allMetrics.centsPerKmCap) },
+    { Field: "Rideshare Taxable Income", Value: round2(allMetrics.rideshareTaxableIncome) },
+    { Field: "Total Taxable Income", Value: round2(allMetrics.taxableIncome) },
     { Field: "Income Tax Payable", Value: round2(allMetrics.uberTaxPayable) },
-    { Field: "PAYG Tax Already Paid", Value: round2(allMetrics.otherIncomeTaxPaid) },
+    { Field: "Estimated PAYG Tax on Other Income", Value: round2(allMetrics.otherIncomeTaxPaid) },
     { Field: "Tax + Medicare", Value: round2(allMetrics.totalTax) },
     { Field: "Effective Tax %", Value: round2(allMetrics.effectiveTaxRate * 100) },
-    { Field: "In Hand", Value: round2(allMetrics.inHand) }
+    { Field: "Balance", Value: round2(allMetrics.balance) }
   ];
   const basRows = [{
     G1_Total_Sales: round2(allMetrics.fareGross),
@@ -1244,16 +1358,25 @@ function downloadReportWorkbook(reportType = "full") {
   const taxRows = [{
     Other_Income: round2(n(db.tax?.other_income || 0)),
     Super_Contribution: round2(n(db.tax?.super_contribution || 0)),
+    Deduction_Method: deductionMethodLabel(allMetrics.deductionMethod),
+    Deductible_Expenses: round2(allMetrics.deductibleExpenses),
+    Vehicle_Expense_Deduction: round2(allMetrics.vehicleExpenseDeduction),
+    Other_Expense_Deduction: round2(allMetrics.otherExpenseDeduction),
+    Cents_Per_KM_Deduction: round2(allMetrics.centsPerKmDeduction),
+    Cents_Per_KM_Used: round2(allMetrics.cappedBusinessKm),
+    Cents_Per_KM_Rate: round2(allMetrics.centsPerKmRate),
+    Cents_Per_KM_Cap: round2(allMetrics.centsPerKmCap),
     Rideshare_Taxable_Income: round2(allMetrics.rideshareTaxableIncome),
-    Taxable_Income: round2(allMetrics.taxableIncome),
+    Total_Taxable_Income: round2(allMetrics.taxableIncome),
     Income_Tax: round2(allMetrics.incomeTax),
     Medicare: round2(allMetrics.medicare),
     Total_Tax: round2(allMetrics.totalTax),
     Income_Tax_Payable: round2(allMetrics.uberTaxPayable),
-    PAYG_Tax_Already_Paid: round2(allMetrics.otherIncomeTaxPaid),
+    Estimated_PAYG_Tax_on_Other_Income: round2(allMetrics.otherIncomeTaxPaid),
     Marginal_Tax_Slab: allMetrics.slabLabel,
     Effective_Tax_Pct: round2(allMetrics.effectiveTaxRate * 100),
-    In_Hand: round2(allMetrics.inHand)
+    Rideshare_Effective_Tax_Pct: round2(allMetrics.rideshareEffectiveTaxRate * 100),
+    Balance: round2(allMetrics.balance)
   }];
 
   const weeklyRows = weeklyFareSummaries()
@@ -1303,10 +1426,15 @@ function downloadReportWorkbook(reportType = "full") {
       ["Tax Summary", taxRows],
       ["Period Tax", reportRows.map((row) => ({
         Period: row.Period,
-        Taxable_Income: row.Taxable_Income,
+        Deduction_Method: row.Deduction_Method,
+        Deductible_Expenses: row.Deductible_Expenses,
+        Cents_Per_KM_Deduction: row.Cents_Per_KM_Deduction,
+        Cents_Per_KM_Used: row.Cents_Per_KM_Used,
+        Rideshare_Taxable_Income: row.Rideshare_Taxable_Income,
+        Total_Taxable_Income: row.Total_Taxable_Income,
         Income_Tax_Payable: row.Income_Tax_Payable,
-        PAYG_Tax_Paid: row.PAYG_Tax_Paid,
-        In_Hand: row.In_Hand
+        Estimated_PAYG_Tax_on_Other_Income: row.Estimated_PAYG_Tax_on_Other_Income,
+        Balance: row.Balance
       }))],
       ["Expenses", expenses]
     ],
@@ -1425,14 +1553,14 @@ function renderExecutiveReport(period, year, totals, periodRows, weeklyRows, exp
     </div>
     <div class="report-kpis">
       ${reportKpi("Net Payout", aud(totals.netPayout))}
-      ${reportKpi("In Hand", aud(totals.inHand))}
+      ${reportKpi("Balance", aud(totals.balance))}
       ${reportKpi("GST Payable", aud(totals.gstPayable))}
       ${reportKpi("Income Tax Payable", aud(totals.uberTaxPayable))}
     </div>
     <div class="report-two-up">
       <section>
         <h4>Period Performance</h4>
-        ${renderBarChart(periodRows.map((row) => ({ label: row.label, value: row.inHand })), "In-Hand")}
+        ${renderBarChart(periodRows.map((row) => ({ label: row.label, value: row.balance })), "Balance")}
       </section>
       <section>
         <h4>Expense Mix</h4>
@@ -1440,7 +1568,7 @@ function renderExecutiveReport(period, year, totals, periodRows, weeklyRows, exp
       </section>
     </div>
     <h4>Period Summary Table</h4>
-    ${htmlTable(["Period", "Fare", "GST", "Tax", "In Hand"], periodRows.map((row) => [row.label, aud(row.fareGross), aud(row.gstPayable), aud(row.uberTaxPayable), aud(row.inHand)]))}
+    ${htmlTable(["Period", "Fare", "GST", "Tax", "Balance"], periodRows.map((row) => [row.label, aud(row.fareGross), aud(row.gstPayable), aud(row.uberTaxPayable), aud(row.balance)]))}
     <h4>Top Weekly Weeks</h4>
     ${htmlTable(["Week", "Gross", "Tips", "Net Payout"], weeklyRows.slice(0, 8).map((row) => [row.label, aud(row.gross), aud(row.tipExtra), aud(row.netPayout)]))}
   `;
@@ -1476,19 +1604,23 @@ function renderTaxReport(period, year, totals, periodRows) {
       </div>
     </div>
     <div class="report-kpis">
-      ${reportKpi("Taxable Income", aud(totals.taxableIncome))}
+      ${reportKpi("Rideshare Taxable Income", aud(totals.rideshareTaxableIncome))}
       ${reportKpi("Income Tax Payable", aud(totals.uberTaxPayable))}
-      ${reportKpi("PAYG Tax Paid", aud(totals.otherIncomeTaxPaid))}
+      ${reportKpi("Estimated PAYG Tax", aud(totals.otherIncomeTaxPaid))}
       ${reportKpi("Effective Tax Rate", pct(totals.totalTax / Math.max(totals.taxableIncome, 1)))}
     </div>
     <div class="report-grid">
+      ${line("Deduction Method", deductionMethodLabel(totals.deductionMethod))}
+      ${line("Total Taxable Income", aud(totals.taxableIncome))}
       ${line("Rideshare Taxable Income", aud(totals.rideshareTaxableIncome))}
+      ${line("Business-use Expenses + Deductible Super", aud(totals.deductibleExpenses))}
+      ${totals.deductionMethod === "cents_per_km" ? line("Cents per KM Deduction", `${aud(totals.centsPerKmDeduction)} (${f2(totals.cappedBusinessKm)} km x ${aud(totals.centsPerKmRate)})`) : line("Business-use Actual Expense Deduction", aud(totals.vehicleExpenseDeduction))}
       ${line("Total Tax", aud(totals.totalTax))}
       ${line("Medicare Levy", aud(totals.medicare))}
       ${line("Current Slab", esc(taxSlabForIncome(totals.taxableIncome).label))}
     </div>
     <h4>Period Tax Table</h4>
-    ${htmlTable(["Period", "Taxable Income", "Income Tax Payable", "PAYG Paid", "In Hand"], periodRows.map((row) => [row.label, aud(row.taxableIncome), aud(row.uberTaxPayable), aud(row.otherIncomeTaxPaid), aud(row.inHand)]))}
+    ${htmlTable(["Period", "Method", "Deduction", "Rideshare Taxable", "Total Taxable", "Income Tax Payable", "Estimated PAYG", "Balance"], periodRows.map((row) => [row.label, deductionMethodLabel(row.deductionMethod), aud(row.deductibleExpenses), aud(row.rideshareTaxableIncome), aud(row.taxableIncome), aud(row.uberTaxPayable), aud(row.otherIncomeTaxPaid), aud(row.balance)]))}
     <h4>Tax Trend</h4>
     ${renderBarChart(periodRows.map((row) => ({ label: row.label, value: row.uberTaxPayable })), "Tax")}
   `;
@@ -1633,10 +1765,10 @@ function downloadReportCsv(kind) {
     headers = ["date", "purpose", "odo_start", "odo_end", "km", "notes"];
     rows = db.trips.filter((row) => row.date >= startDate && row.date <= endDate).map((row) => [row.date, row.purpose, row.odo_start, row.odo_end, row.km, row.notes || ""]);
   } else {
-    headers = ["period", "fare", "gst_collected", "gst_credits", "gst_payable", "taxable_income", "income_tax_payable", "in_hand"];
+    headers = ["period", "fare", "gst_collected", "gst_credits", "gst_payable", "deduction_method", "deductible_expenses", "cents_per_km_deduction", "cents_per_km_used", "rideshare_taxable_income", "total_taxable_income", "income_tax_payable", "balance"];
     rows = bucketizeByPeriod(period, year).map((bucket) => {
       const row = computeForRange(bucket.from, bucket.to);
-      return [bucket.label, round2(row.fareGross), round2(row.fareGst), round2(row.expenseGstCredit), round2(row.gstPayable), round2(row.taxableIncome), round2(row.uberTaxPayable), round2(row.inHand)];
+      return [bucket.label, round2(row.fareGross), round2(row.fareGst), round2(row.expenseGstCredit), round2(row.gstPayable), deductionMethodLabel(row.deductionMethod), round2(row.deductibleExpenses), round2(row.centsPerKmDeduction), round2(row.cappedBusinessKm), round2(row.rideshareTaxableIncome), round2(row.taxableIncome), round2(row.uberTaxPayable), round2(row.balance)];
     });
   }
   const lines = [headers.join(",")].concat(rows.map((row) => row.map(csvCell).join(",")));
@@ -1700,21 +1832,29 @@ function computeForRange(from, to) {
   const tripCount = trips.length;
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
   const expenseGstCredit = expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0) + platformFeeGst;
-
-  const deductibleExpenses = expenseTotal * businessUsePct + platformFees;
+  const gstPayable = Math.max(0, fareGst - expenseGstCredit);
   const otherIncomeAllocated = allocateAnnualValueToRange(n(db.tax?.other_income || 0), from, to);
   const superAllocated = allocateAnnualValueToRange(n(db.tax?.super_contribution || 0), from, to);
-  const rideshareTaxableIncome = Math.max(0, fareGross + tipExtra - deductibleExpenses - superAllocated);
+  const taxSettings = normalizeTaxSettings({
+    ...(db.tax || DEFAULT_TAX_SETTINGS),
+    other_income: otherIncomeAllocated,
+    super_contribution: superAllocated,
+    cents_per_km_cap: allocateAnnualValueToRange(n(db.tax?.cents_per_km_cap ?? DEFAULT_TAX_SETTINGS.cents_per_km_cap), from, to)
+  });
+  const deduction = computeDeductionModel({ expenses, businessUsePct, businessKm, superContrib: superAllocated, taxSettings });
+  const deductibleExpenses = deduction.deductibleExpenses;
+  const rideshareTaxableIncome = Math.max(0, netPayout - gstPayable - deductibleExpenses);
   const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncomeAllocated);
   const taxBreakdown = computeTaxBreakdown(rideshareTaxableIncome, otherIncomeAllocated);
   const incomeTax = taxBreakdown.incomeTax;
   const medicare = taxBreakdown.medicare;
   const totalTax = taxBreakdown.totalTax;
-  const gstPayable = Math.max(0, fareGst - expenseGstCredit);
-  const dashboardTaxableIncome = Math.max(0, netPayout - gstPayable - expenseTotal);
+  const preTaxBalance = netPayout - gstPayable - expenseTotal;
+  const dashboardTaxableIncome = rideshareTaxableIncome;
   const afterTaxIncome = netPayout - gstPayable - taxBreakdown.uberTaxPayable;
   const balance = netPayout - gstPayable - taxBreakdown.uberTaxPayable - expenseTotal;
   const inHand = balance;
+  const rideshareEffectiveTaxRate = rideshareTaxableIncome > 0 ? taxBreakdown.uberTaxPayable / rideshareTaxableIncome : 0;
 
   return {
     fareGross,
@@ -1732,6 +1872,16 @@ function computeForRange(from, to) {
     businessKm,
     tripCount,
     businessUsePct,
+    businessUseExpenses: deduction.businessUseExpenses,
+    deductibleExpenses,
+    deductionMethod: deduction.deductionMethod,
+    vehicleExpenseTotal: deduction.vehicleExpenseTotal,
+    vehicleExpenseDeduction: deduction.vehicleExpenseDeduction,
+    otherExpenseDeduction: deduction.otherExpenseDeduction,
+    centsPerKmDeduction: deduction.centsPerKmDeduction,
+    centsPerKmRate: deduction.centsPerKmRate,
+    centsPerKmCap: deduction.centsPerKmCap,
+    cappedBusinessKm: deduction.cappedBusinessKm,
     rideshareTaxableIncome,
     taxableIncome,
     incomeTax,
@@ -1739,9 +1889,11 @@ function computeForRange(from, to) {
     totalTax,
     uberTaxPayable: taxBreakdown.uberTaxPayable,
     otherIncomeTaxPaid: taxBreakdown.otherIncomeTaxPaid,
+    preTaxBalance,
     dashboardTaxableIncome,
     afterTaxIncome,
     balance,
+    rideshareEffectiveTaxRate,
     inHand
   };
 }
@@ -1907,8 +2059,12 @@ function renderTaxBreakdown() {
       <strong>Rideshare Tax Payable</strong>
       <div class="meta">Tax still payable from Uber and rideshare activity after excluding PAYG salary tax already withheld.</div>
       ${line("Ride Share Total Income", aud(m.netPayout))}
+      ${line("Deduction Method", deductionMethodLabel(m.deductionMethod))}
+      ${line("Business-use Expenses + Deductible Super", aud(m.deductibleExpenses))}
+      ${m.deductionMethod === "cents_per_km" ? line("Cents per KM Deduction", `${aud(m.centsPerKmDeduction)} (${f2(m.cappedBusinessKm)} km x ${aud(m.centsPerKmRate)})`) : line("Business-use Actual Expense Deduction", aud(m.vehicleExpenseDeduction))}
       ${line("Rideshare Taxable Income", aud(m.rideshareTaxableIncome))}
       ${line("Income Tax Payable", aud(m.uberTaxPayable))}
+      ${line("Effective Rideshare Tax Rate", pct(m.rideshareEffectiveTaxRate))}
       ${line("GST Payable", aud(m.gstPayable))}
       ${line("Rideshare After Tax Income", aud(m.afterTaxIncome))}
     </div>
@@ -1916,7 +2072,7 @@ function renderTaxBreakdown() {
       <strong>Other Income Tax Position</strong>
       <div class="meta">This is treated as PAYG income already taxed through salary withholding.</div>
       ${line("Other Income Entered", aud(otherIncome))}
-      ${line("PAYG Tax Already Paid", aud(m.otherIncomeTaxPaid))}
+      ${line("Estimated PAYG Tax on Other Income", aud(m.otherIncomeTaxPaid))}
       ${line("Current Tax Slab", esc(m.slabLabel))}
     </div>
   `;
@@ -1928,7 +2084,10 @@ function readDraftTaxValues() {
   if (!form) return {};
   return {
     other_income: n(form.other_income?.value),
-    super_contribution: n(form.super_contribution?.value)
+    super_contribution: n(form.super_contribution?.value),
+    deduction_method: validDeductionMethod(form.deduction_method?.value),
+    cents_per_km_rate: n(form.cents_per_km_rate?.value || DEFAULT_TAX_SETTINGS.cents_per_km_rate),
+    cents_per_km_cap: n(form.cents_per_km_cap?.value || DEFAULT_TAX_SETTINGS.cents_per_km_cap)
   };
 }
 
@@ -1948,10 +2107,8 @@ function computeTaxBreakdown(rideshareTaxableIncome, otherIncome) {
   const incomeTax = estimateTaxAu(taxableIncome);
   const medicare = taxableIncome * 0.02;
   const totalTax = incomeTax + medicare;
-  const rideshareOnlyIncomeTax = estimateTaxAu(rideshareTaxableIncome);
-  const rideshareOnlyMedicare = rideshareTaxableIncome * 0.02;
-  const otherIncomeTaxPaid = Math.max(0, totalTax - (rideshareOnlyIncomeTax + rideshareOnlyMedicare));
-  const uberTaxPayable = Math.max(0, totalTax - (estimateTaxAu(otherIncome) + otherIncome * 0.02));
+  const otherIncomeTaxPaid = estimateTaxAu(otherIncome) + otherIncome * 0.02;
+  const uberTaxPayable = Math.max(0, totalTax - otherIncomeTaxPaid);
   return { incomeTax, medicare, totalTax, otherIncomeTaxPaid, uberTaxPayable };
 }
 

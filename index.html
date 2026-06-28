@@ -22,7 +22,7 @@
     <header class="hero">
       <div>
         <h1>RideMint Ledger Pro</h1>
-        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-06-28a</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-06-28c</p>
       </div>
       <div class="hero-actions" id="topActions">
         <button id="printReportBtn" class="btn secondary hidden">Download Report</button>
@@ -216,7 +216,17 @@
           <form id="taxForm" class="form-grid single">
             <div><label>Other Income (AUD) - Salary/Other Jobs</label><input type="number" name="other_income" min="0" step="0.01" value="0" /></div>
             <div><label>Super Contribution (AUD)</label><input type="number" name="super_contribution" min="0" step="0.01" value="0" /></div>
+            <div>
+              <label>Rideshare Car Deduction Method</label>
+              <select name="deduction_method">
+                <option value="logbook">Logbook / business-use % actual expenses</option>
+                <option value="cents_per_km">Cents per Uber kilometre</option>
+              </select>
+            </div>
+            <div><label>Cents per KM Rate (AUD)</label><input type="number" name="cents_per_km_rate" min="0" step="0.01" value="0.88" /></div>
+            <div><label>Cents per KM Cap</label><input type="number" name="cents_per_km_cap" min="0" step="1" value="5000" /></div>
             <div><label>Auto Tax % (Calculated)</label><input type="text" id="autoTaxPct" value="0.0%" readonly /></div>
+            <p class="small-note full">Cents per kilometre applies to business kilometres, capped per car per year. It replaces vehicle running expense deductions for income tax only; GST/BAS still uses actual GST credits.</p>
             <button type="submit" class="btn full">Save Tax Settings</button>
           </form>
           <div class="status" id="taxStatus"></div>

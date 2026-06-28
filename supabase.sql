@@ -87,10 +87,31 @@ create table if not exists tax_settings (
   user_id uuid not null unique references auth.users(id) on delete cascade,
   other_income numeric(12,2) not null default 0,
   super_contribution numeric(12,2) not null default 0,
+  deduction_method text not null default 'logbook' check (deduction_method in ('logbook', 'cents_per_km')),
+  cents_per_km_rate numeric(6,2) not null default 0.88,
+  cents_per_km_cap numeric(8,0) not null default 5000,
   tax_reserve_pct numeric(5,2) not null default 22,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+
+alter table tax_settings add column if not exists deduction_method text not null default 'logbook';
+alter table tax_settings add column if not exists cents_per_km_rate numeric(6,2) not null default 0.88;
+alter table tax_settings add column if not exists cents_per_km_cap numeric(8,0) not null default 5000;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'tax_settings_deduction_method_check'
+      and conrelid = 'tax_settings'::regclass
+  ) then
+    alter table tax_settings
+      add constraint tax_settings_deduction_method_check
+      check (deduction_method in ('logbook', 'cents_per_km'));
+  end if;
+end $$;
 
 create table if not exists profiles (
   id uuid primary key references auth.users(id) on delete cascade,
