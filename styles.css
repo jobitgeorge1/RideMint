@@ -305,6 +305,33 @@ input:focus, select:focus {
 .kpi-tone-3 { background: linear-gradient(160deg,#fff1d9,#ffdca8); }
 .kpi-tone-4 { background: linear-gradient(160deg,#ffe0e5,#ffc8d4); }
 .kpi-tone-5 { background: linear-gradient(160deg,#ece6ff,#ddd2ff); }
+.summary-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+  margin: 12px 0 16px;
+}
+.summary-tile {
+  border: 1px solid rgba(16, 35, 61, 0.08);
+  border-radius: 16px;
+  padding: 12px;
+  color: #10233d;
+  box-shadow: 0 10px 24px rgba(15, 35, 65, 0.08);
+}
+.summary-tile span {
+  display: block;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  opacity: 0.76;
+  text-transform: uppercase;
+}
+.summary-tile strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.16rem;
+  line-height: 1.1;
+}
 .dashboard-detail-card { background: rgba(255,255,255,0.82); border: 1px solid var(--line); border-radius: 20px; padding: 16px; box-shadow: var(--shadow); width: 100%; overflow: hidden; }
 .receipt-vault {
   border-top: 1px solid var(--line);

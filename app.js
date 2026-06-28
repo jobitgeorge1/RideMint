@@ -50,7 +50,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-28d (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-28e (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -878,7 +878,7 @@ async function onSaveTax(e) {
 }
 
 function renderAll() {
-  renderTripTable(); renderLogbookSummary(); renderFareWeeklyTable(); renderExpenseTable(); renderReceiptGrid(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
+  renderTripTable(); renderLogbookSummary(); renderIncomeSummaryTiles(); renderFareWeeklyTable(); renderExpenseSummaryTiles(); renderExpenseTable(); renderReceiptGrid(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
   updateAutoTaxPct();
 }
 
@@ -910,6 +910,34 @@ function renderFareWeeklyTable() {
       rows.slice(0, 8).map((x) => [esc(x.label), aud(x.gross), aud(x.tipExtra), aud(x.netPayout), aud(x.gstPayableShare), aud(x.taxPayableShare)])
     );
   }
+}
+
+function renderIncomeSummaryTiles() {
+  if (!el("incomeSummaryTiles")) return;
+  const m = computeMetrics();
+  const tiles = [
+    ["Total Income", aud(m.netPayout), "kpi-tone-3"],
+    ["Gross Fare", aud(m.fareGross), "kpi-tone-1"],
+    ["GST on Fares", aud(m.fareGst), "kpi-tone-4"],
+    ["Total Tips", aud(m.tipExtra), "kpi-tone-2"],
+    ["Platform Fees", aud(m.platformFees), "kpi-tone-5"],
+    ["Fare After Fee", aud(m.fareAfterUberFee), "kpi-tone-1"]
+  ];
+  el("incomeSummaryTiles").innerHTML = tiles.map(([label, value, tone]) => `<article class="summary-tile ${tone}"><span>${label}</span><strong>${value}</strong></article>`).join("");
+}
+
+function renderExpenseSummaryTiles() {
+  if (!el("expenseSummaryTiles")) return;
+  const m = computeMetrics();
+  const tiles = [
+    ["Total Expenses", aud(m.expenseTotal), "kpi-tone-3"],
+    ["Business % Amount", aud(m.businessUseExpenseAmount), "kpi-tone-1"],
+    ["Expense GST Credit", aud(m.expenseOnlyGstCredit), "kpi-tone-2"],
+    ["Total GST Credit", aud(m.expenseGstCredit), "kpi-tone-4"],
+    ["Business Use", pct(m.businessUsePct), "kpi-tone-5"],
+    ["Vehicle Costs", aud(m.vehicleExpenseTotal), "kpi-tone-1"]
+  ];
+  el("expenseSummaryTiles").innerHTML = tiles.map(([label, value, tone]) => `<article class="summary-tile ${tone}"><span>${label}</span><strong>${value}</strong></article>`).join("");
 }
 function renderExpenseTable() {
   const businessUsePct = currentBusinessUsePct();
@@ -1173,7 +1201,9 @@ function computeMetrics(overrides = {}) {
   const personalKm = Math.max(0, totalKm - businessKm);
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
   const expenseTotal = sum(db.expenses, "amount");
-  const expenseGstCredit = db.expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0) + platformFeeGst;
+  const businessUseExpenseAmount = round2(expenseTotal * businessUsePct);
+  const expenseOnlyGstCredit = db.expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0);
+  const expenseGstCredit = expenseOnlyGstCredit + platformFeeGst;
   const tollTotal = sum(db.tolls, "amount");
   const reimbursedTolls = db.tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
@@ -1210,6 +1240,8 @@ function computeMetrics(overrides = {}) {
     tipExtra,
     fareAfterUberFee,
     expenseTotal,
+    businessUseExpenseAmount,
+    expenseOnlyGstCredit,
     expenseGstCredit,
     tollTotal,
     reimbursedTolls,
@@ -1846,7 +1878,9 @@ function computeForRange(from, to) {
   const businessKm = trips.reduce((a, x) => a + (x.purpose === "Business" ? Number(x.km) : 0), 0);
   const tripCount = trips.length;
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
-  const expenseGstCredit = expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0) + platformFeeGst;
+  const businessUseExpenseAmount = round2(expenseTotal * businessUsePct);
+  const expenseOnlyGstCredit = expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0);
+  const expenseGstCredit = expenseOnlyGstCredit + platformFeeGst;
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
   const otherIncomeAllocated = allocateAnnualValueToRange(n(db.tax?.other_income || 0), from, to);
   const superAllocated = allocateAnnualValueToRange(n(db.tax?.super_contribution || 0), from, to);
@@ -1881,6 +1915,8 @@ function computeForRange(from, to) {
     tollTotal,
     reimbursedTolls,
     fareGst,
+    businessUseExpenseAmount,
+    expenseOnlyGstCredit,
     expenseGstCredit,
     gstPayable,
     totalKm,

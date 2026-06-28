@@ -22,7 +22,7 @@
     <header class="hero">
       <div>
         <h1>RideMint Ledger Pro</h1>
-        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-06-28d</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-06-28e</p>
       </div>
       <div class="hero-actions" id="topActions">
         <button id="printReportBtn" class="btn secondary hidden">Download Report</button>
@@ -135,6 +135,7 @@
         <article class="card">
           <h2>Fare Income</h2>
           <p class="small-note">Only weekly entries are used here. Each record is one Monday to Sunday period.</p>
+          <section class="summary-tiles" id="incomeSummaryTiles"></section>
           <form id="fareForm" class="form-grid single">
             <div><label>From Date (Monday)</label><input type="date" name="date" required /></div>
             <div class="grid2 compact-grid">
@@ -164,6 +165,7 @@
       <section class="tab-panel hidden" id="tab-expenses">
         <article class="card">
           <h2>Expenses & GST Credits</h2>
+          <section class="summary-tiles" id="expenseSummaryTiles"></section>
           <form id="expenseForm" class="form-grid single">
             <div><label>Date</label><input type="date" name="date" required /></div>
             <div><label>Category</label><select name="category"><option>Fuel</option><option>Maintenance</option><option>Insurance</option><option>Registration</option><option>Phone/Data</option><option>Car Wash</option><option>Parking</option><option>Other</option></select></div>
