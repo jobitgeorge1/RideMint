@@ -50,7 +50,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-28c (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-28d (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -171,6 +171,9 @@ function bindExpenseGstCalc() {
   form.amount.addEventListener("input", () => {
     if (!form.gst_amount.dataset.manual) form.gst_amount.value = round2(n(form.amount.value) / 11).toFixed(2);
     recalc();
+  });
+  form.category?.addEventListener("change", () => {
+    if (form.is_vehicle_expense) form.is_vehicle_expense.value = isVehicleRunningExpense({ category: form.category.value }) ? "true" : "false";
   });
   form.gst_amount?.addEventListener("input", () => {
     form.gst_amount.dataset.manual = "true";
@@ -680,10 +683,13 @@ function parseExpenseSheet(wb) {
   return rows
     .map((r) => {
       const notes = [r["Supplier"], r["Notes"]].filter(Boolean).join(" | ");
+      const category = String(firstRowValue(r, ["Expense Type", "Category", "Expense"]) || "Other");
+      const vehicleRaw = firstRowValue(r, ["Vehicle Expense", "Vehicle Running Cost", "Is Vehicle Expense", "Expense Tax Type"]);
       return {
         user_id: currentUser.id,
         date: normalizeExcelDate(firstRowValue(r, ["Date", "Expense Date"])),
-        category: String(firstRowValue(r, ["Expense Type", "Category", "Expense"]) || "Other"),
+        category,
+        is_vehicle_expense: vehicleRaw === "" || vehicleRaw == null ? isVehicleRunningExpense({ category }) : parseBoolish(vehicleRaw),
         amount: n(firstRowValue(r, ["Total Amount", "Amount"])),
         gst_amount: n(firstRowValue(r, ["GST Amount", "GST"])),
         gst_claimable: n(firstRowValue(r, ["GST Claimable", "Claimable GST"])) > 0,
@@ -809,16 +815,22 @@ async function onAddExpense(e) {
     user_id: currentUser.id,
     date: f.date.value,
     category: f.category.value,
+    is_vehicle_expense: f.is_vehicle_expense.value === "true",
     amount: n(f.amount.value),
     gst_amount: n(f.gst_amount.value),
     gst_claimable: f.gst_claimable.value === "true",
     gst_credit: f.gst_claimable.value === "true" ? (n(f.gst_credit.value) || n(f.gst_amount.value)) : 0,
     notes: f.notes.value
   };
-  if (editing.expenses) await supabase.from("expenses").update(payload).eq("id", editing.expenses);
-  else await supabase.from("expenses").insert(payload);
+  const result = editing.expenses
+    ? await supabase.from("expenses").update(payload).eq("id", editing.expenses)
+    : await supabase.from("expenses").insert(payload);
+  if (result?.error) {
+    return alert(`Expense save failed: ${result.error.message}. Run the latest supabase.sql migration if this mentions is_vehicle_expense.`);
+  }
   clearEdit("expenses");
   f.reset(); f.date.value = today;
+  if (f.is_vehicle_expense) f.is_vehicle_expense.value = "true";
   if (f.gst_amount) { f.gst_amount.dataset.manual = ""; f.gst_amount.value = "0.00"; }
   if (f.gst_credit) f.gst_credit.value = "0.00";
   await refreshAll();
@@ -902,8 +914,8 @@ function renderFareWeeklyTable() {
 function renderExpenseTable() {
   const businessUsePct = currentBusinessUsePct();
   el("expenseTable").innerHTML = tableHtml(
-    ["Date", "Category", "Amount", "GST Credit", "Actions"],
-    db.expenses.map((x) => [x.date, esc(x.category), aud(x.amount), aud(expenseGstCreditValue(x, businessUsePct)), actionBtns("expenses", x.id)])
+    ["Date", "Category", "Tax Type", "Amount", "GST Credit", "Actions"],
+    db.expenses.map((x) => [x.date, esc(x.category), isVehicleRunningExpense(x) ? "Vehicle" : "Other", aud(x.amount), aud(expenseGstCreditValue(x, businessUsePct)), actionBtns("expenses", x.id)])
   );
   bindRowActions();
 }
@@ -1117,6 +1129,7 @@ function taxSettingsWithOverrides(overrides = {}) {
 }
 
 function isVehicleRunningExpense(row) {
+  if (typeof row?.is_vehicle_expense === "boolean") return row.is_vehicle_expense;
   return VEHICLE_RUNNING_EXPENSE_CATEGORIES.has(String(row?.category || "").trim().toLowerCase());
 }
 
@@ -1297,6 +1310,7 @@ function downloadReportWorkbook(reportType = "full") {
   const expenses = filterByRange(db.expenses).map((row) => ({
     Date: row.date,
     Category: row.category,
+    Tax_Type: isVehicleRunningExpense(row) ? "Vehicle running cost" : "Other business expense",
     Amount: round2(row.amount),
     GST_Claimable: row.gst_claimable ? "Yes" : "No",
     GST_Amount: round2(row.gst_amount || 0),
@@ -1613,8 +1627,9 @@ function renderTaxReport(period, year, totals, periodRows) {
       ${line("Deduction Method", deductionMethodLabel(totals.deductionMethod))}
       ${line("Total Taxable Income", aud(totals.taxableIncome))}
       ${line("Rideshare Taxable Income", aud(totals.rideshareTaxableIncome))}
-      ${line("Business-use Expenses + Deductible Super", aud(totals.deductibleExpenses))}
-      ${totals.deductionMethod === "cents_per_km" ? line("Cents per KM Deduction", `${aud(totals.centsPerKmDeduction)} (${f2(totals.cappedBusinessKm)} km x ${aud(totals.centsPerKmRate)})`) : line("Business-use Actual Expense Deduction", aud(totals.vehicleExpenseDeduction))}
+      ${line("Total Income-tax Deduction", aud(totals.deductibleExpenses))}
+      ${totals.deductionMethod === "cents_per_km" ? line("Vehicle Deduction - Cents/KM", `${aud(totals.centsPerKmDeduction)} (${f2(totals.cappedBusinessKm)} km x ${aud(totals.centsPerKmRate)})`) : line("Actual Expense Deduction", aud(totals.vehicleExpenseDeduction))}
+      ${totals.deductionMethod === "cents_per_km" ? line("Other Business Expense Deduction", aud(totals.otherExpenseDeduction)) : ""}
       ${line("Total Tax", aud(totals.totalTax))}
       ${line("Medicare Levy", aud(totals.medicare))}
       ${line("Current Slab", esc(taxSlabForIncome(totals.taxableIncome).label))}
@@ -1997,7 +2012,7 @@ function startEdit(table, id) {
   if (table === "expenses") {
     const r = db.expenses.find((x) => x.id === id); if (!r) return;
     const f = el("expenseForm"); editing.expenses = id;
-    f.date.value = r.date; f.category.value = r.category; f.amount.value = r.amount; if (f.gst_amount) f.gst_amount.value = round2(r.gst_amount || 0).toFixed(2); f.gst_claimable.value = String(!!r.gst_claimable); if (f.gst_credit) f.gst_credit.value = round2(expenseGstCreditValue(r)).toFixed(2); f.notes.value = r.notes || "";
+    f.date.value = r.date; f.category.value = r.category; if (f.is_vehicle_expense) f.is_vehicle_expense.value = isVehicleRunningExpense(r) ? "true" : "false"; f.amount.value = r.amount; if (f.gst_amount) f.gst_amount.value = round2(r.gst_amount || 0).toFixed(2); f.gst_claimable.value = String(!!r.gst_claimable); if (f.gst_credit) f.gst_credit.value = round2(expenseGstCreditValue(r)).toFixed(2); f.notes.value = r.notes || "";
     setEditUI("expenseSubmitBtn", "expenseCancelEditBtn", true, "Update Expense");
   }
   if (table === "tolls") {
@@ -2060,8 +2075,10 @@ function renderTaxBreakdown() {
       <div class="meta">Tax still payable from Uber and rideshare activity after excluding PAYG salary tax already withheld.</div>
       ${line("Ride Share Total Income", aud(m.netPayout))}
       ${line("Deduction Method", deductionMethodLabel(m.deductionMethod))}
-      ${line("Business-use Expenses + Deductible Super", aud(m.deductibleExpenses))}
-      ${m.deductionMethod === "cents_per_km" ? line("Cents per KM Deduction", `${aud(m.centsPerKmDeduction)} (${f2(m.cappedBusinessKm)} km x ${aud(m.centsPerKmRate)})`) : line("Business-use Actual Expense Deduction", aud(m.vehicleExpenseDeduction))}
+      ${line("Total Income-tax Deduction", aud(m.deductibleExpenses))}
+      ${m.deductionMethod === "cents_per_km" ? line("Vehicle Deduction - Cents/KM", `${aud(m.centsPerKmDeduction)} (${f2(m.cappedBusinessKm)} km x ${aud(m.centsPerKmRate)})`) : line("Actual Expense Deduction", aud(m.vehicleExpenseDeduction))}
+      ${m.deductionMethod === "cents_per_km" ? line("Other Business Expense Deduction", aud(m.otherExpenseDeduction)) : ""}
+      ${line("Deductible Super", aud(n(readDraftTaxValues().super_contribution)))}
       ${line("Rideshare Taxable Income", aud(m.rideshareTaxableIncome))}
       ${line("Income Tax Payable", aud(m.uberTaxPayable))}
       ${line("Effective Rideshare Tax Rate", pct(m.rideshareEffectiveTaxRate))}
@@ -2190,6 +2207,12 @@ async function clearAllAccountData() {
 
 function gstFromFare(x) { return x.gst_included ? n(x.gross) / 11 : n(x.gross) * 0.1; }
 function netPayoutForFare(x) { return round2(n(x.net_payout || (n(x.gross) + n(x.tip_extra) - n(x.platform_fee)))); }
+function parseBoolish(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (["true", "yes", "y", "1", "vehicle", "vehicle running cost"].includes(text)) return true;
+  if (["false", "no", "n", "0", "other", "other business expense", "non-vehicle"].includes(text)) return false;
+  return n(value) > 0;
+}
 function estimateTaxAu(income) {
   let tax = 0, prev = 0;
   const brackets = [[18200, 0], [45000, 0.16], [135000, 0.30], [190000, 0.37], [Infinity, 0.45]];

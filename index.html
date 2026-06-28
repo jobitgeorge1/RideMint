@@ -22,7 +22,7 @@
     <header class="hero">
       <div>
         <h1>RideMint Ledger Pro</h1>
-        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-06-28c</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-06-28d</p>
       </div>
       <div class="hero-actions" id="topActions">
         <button id="printReportBtn" class="btn secondary hidden">Download Report</button>
@@ -167,6 +167,7 @@
           <form id="expenseForm" class="form-grid single">
             <div><label>Date</label><input type="date" name="date" required /></div>
             <div><label>Category</label><select name="category"><option>Fuel</option><option>Maintenance</option><option>Insurance</option><option>Registration</option><option>Phone/Data</option><option>Car Wash</option><option>Parking</option><option>Other</option></select></div>
+            <div><label>Expense Tax Type</label><select name="is_vehicle_expense"><option value="true">Vehicle running cost</option><option value="false">Other business expense</option></select></div>
             <div><label>Amount (AUD)</label><input type="number" name="amount" step="0.01" min="0" required /></div>
             <div><label>GST Amount (AUD)</label><input type="number" name="gst_amount" step="0.01" min="0" value="0" /></div>
             <div><label>GST Claimable</label><select name="gst_claimable"><option value="true">Yes</option><option value="false">No</option></select></div>
