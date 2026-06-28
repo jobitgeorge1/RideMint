@@ -1,4 +1,4 @@
-const CACHE_NAME = "ridemint-v2026-06-08b";
+const CACHE_NAME = "ridemint-v2026-06-28a";
 const APP_SHELL = [
   "./",
   "./index.html",

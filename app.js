@@ -35,7 +35,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-08b (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-28a (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -1016,7 +1016,9 @@ function renderKpis() {
   const m = computeMetrics();
   const cards = [
     ["Net Payout", aud(m.netPayout), "kpi-tone-3"],
-    ["In Hand", aud(m.inHand), "kpi-tone-2"],
+    ["Balance", aud(m.balance), "kpi-tone-2"],
+    ["Taxable Income", aud(m.dashboardTaxableIncome), "kpi-tone-1"],
+    ["After Tax", aud(m.afterTaxIncome), "kpi-tone-3"],
     ["Fare After Fee", aud(m.fareAfterUberFee), "kpi-tone-1"],
     ["Tip / Extra", aud(m.tipExtra), "kpi-tone-2"],
     ["Income Tax Payable", aud(m.uberTaxPayable), "kpi-tone-5"],
@@ -1041,7 +1043,7 @@ function renderDashboardHero() {
       <div class="hero-chip"><span>This Week</span><strong>${week ? aud(week.netPayout) : aud(0)}</strong></div>
       <div class="hero-chip"><span>GST Payable</span><strong>${aud(m.gstPayable)}</strong></div>
       <div class="hero-chip"><span>Income Tax Payable</span><strong>${aud(m.uberTaxPayable)}</strong></div>
-      <div class="hero-chip"><span>In Hand</span><strong>${aud(m.inHand)}</strong></div>
+      <div class="hero-chip"><span>Balance</span><strong>${aud(m.balance)}</strong></div>
     </div>
   `;
 }
@@ -1091,7 +1093,10 @@ function computeMetrics(overrides = {}) {
   const slab = taxSlabForIncome(taxableIncome);
 
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
-  const inHand = fareGross + tipExtra - expenseTotal - platformFees - uberTaxPayable - gstPayable;
+  const dashboardTaxableIncome = Math.max(0, netPayout - gstPayable - expenseTotal);
+  const afterTaxIncome = netPayout - gstPayable - uberTaxPayable;
+  const balance = netPayout - gstPayable - uberTaxPayable - expenseTotal;
+  const inHand = balance;
 
   const monthsActive = Math.max(1, distinctMonths([...db.fares, ...db.expenses, ...db.tolls].map((x) => x.date)).size);
   const monthlyAvgNet = inHand / monthsActive;
@@ -1119,6 +1124,9 @@ function computeMetrics(overrides = {}) {
     uberTaxPayable,
     otherIncomeTaxPaid,
     gstPayable,
+    dashboardTaxableIncome,
+    afterTaxIncome,
+    balance,
     inHand,
     netPayout,
     monthlyAvgNet,
@@ -1703,7 +1711,10 @@ function computeForRange(from, to) {
   const medicare = taxBreakdown.medicare;
   const totalTax = taxBreakdown.totalTax;
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
-  const inHand = fareGross + tipExtra - expenseTotal - platformFees - taxBreakdown.uberTaxPayable - gstPayable;
+  const dashboardTaxableIncome = Math.max(0, netPayout - gstPayable - expenseTotal);
+  const afterTaxIncome = netPayout - gstPayable - taxBreakdown.uberTaxPayable;
+  const balance = netPayout - gstPayable - taxBreakdown.uberTaxPayable - expenseTotal;
+  const inHand = balance;
 
   return {
     fareGross,
@@ -1728,6 +1739,9 @@ function computeForRange(from, to) {
     totalTax,
     uberTaxPayable: taxBreakdown.uberTaxPayable,
     otherIncomeTaxPaid: taxBreakdown.otherIncomeTaxPaid,
+    dashboardTaxableIncome,
+    afterTaxIncome,
+    balance,
     inHand
   };
 }
@@ -1892,9 +1906,11 @@ function renderTaxBreakdown() {
     <div class="tax-panel">
       <strong>Rideshare Tax Payable</strong>
       <div class="meta">Tax still payable from Uber and rideshare activity after excluding PAYG salary tax already withheld.</div>
+      ${line("Ride Share Total Income", aud(m.netPayout))}
       ${line("Rideshare Taxable Income", aud(m.rideshareTaxableIncome))}
       ${line("Income Tax Payable", aud(m.uberTaxPayable))}
       ${line("GST Payable", aud(m.gstPayable))}
+      ${line("Rideshare After Tax Income", aud(m.afterTaxIncome))}
     </div>
     <div class="tax-panel">
       <strong>Other Income Tax Position</strong>
