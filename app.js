@@ -50,7 +50,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-06-28f (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-07-04a (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -918,7 +918,7 @@ function renderIncomeSummaryTiles() {
   const tiles = [
     ["Total Income", aud(m.netPayout), "kpi-tone-3"],
     ["Gross Fare", aud(m.fareGross), "kpi-tone-1"],
-    ["GST on Fares", aud(m.fareGst), "kpi-tone-4"],
+    ["GST on Fares + Tips", aud(m.fareGst), "kpi-tone-4"],
     ["Total Tips", aud(m.tipExtra), "kpi-tone-2"],
     ["Platform Fees", aud(m.platformFees), "kpi-tone-5"],
     ["Fare After Fee", aud(m.fareAfterUberFee), "kpi-tone-1"]
@@ -1192,6 +1192,7 @@ function computeMetrics(overrides = {}) {
   const fareGross = sum(db.fares, "gross");
   const fareGst = db.fares.reduce((a, x) => a + gstFromFare(x), 0);
   const tipExtra = db.fares.reduce((a, x) => a + n(x.tip_extra), 0);
+  const gstSalesTotal = fareGross + tipExtra;
   const platformFees = db.fares.reduce((a, x) => a + n(x.platform_fee), 0);
   const platformFeeGst = db.fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
   const fareAfterUberFee = round2(fareGross - platformFees);
@@ -1236,6 +1237,7 @@ function computeMetrics(overrides = {}) {
 
   return {
     fareGross,
+    gstSalesTotal,
     fareGst,
     tipExtra,
     fareAfterUberFee,
@@ -1306,6 +1308,7 @@ function downloadReportWorkbook(reportType = "full") {
     return {
       Period: bucket.label,
       Fare: round2(metrics.fareGross),
+      G1_Sales_Including_Tips: round2(metrics.gstSalesTotal),
       Expenses: round2(metrics.expenseTotal),
       GST_Collected: round2(metrics.fareGst),
       GST_Credits: round2(metrics.expenseGstCredit),
@@ -1334,7 +1337,7 @@ function downloadReportWorkbook(reportType = "full") {
     To_Date: row.week_end || addDays(row.date, 6),
     Platform: row.platform,
     Trip_Gross_Fare: round2(row.gross),
-    GST_On_Fare: round2(gstFromFare(row)),
+    GST_On_Fare_and_Tips: round2(gstFromFare(row)),
     Platform_Fee: round2(row.platform_fee),
     Platform_Fee_GST: round2(row.platform_fee_gst),
     Tip_Extra: round2(row.tip_extra),
@@ -1397,7 +1400,7 @@ function downloadReportWorkbook(reportType = "full") {
     { Field: "Balance", Value: round2(allMetrics.balance) }
   ];
   const basRows = [{
-    G1_Total_Sales: round2(allMetrics.fareGross),
+    G1_Total_Sales: round2(allMetrics.gstSalesTotal),
     GST_on_Sales_1A: round2(allMetrics.fareGst),
     Expense_GST_Credits_1B: round2(allMetrics.expenseGstCredit),
     Platform_Fee_GST_Info: round2(allMetrics.platformFeeGst || 0),
@@ -1463,6 +1466,7 @@ function downloadReportWorkbook(reportType = "full") {
       ["BAS Summary", basRows],
       ["GST Ledger", reportRows.map((row) => ({
         Period: row.Period,
+        G1_Sales_Including_Tips: row.G1_Sales_Including_Tips,
         GST_Collected: row.GST_Collected,
         Expense_GST_Credits: row.GST_Credits,
         GST_Payable: row.GST_Payable
@@ -1631,13 +1635,13 @@ function renderBasReport(period, year, totals, periodRows) {
       </div>
     </div>
     <div class="report-kpis">
-      ${reportKpi("G1 Total Sales", aud(totals.fareGross))}
+      ${reportKpi("G1 Total Sales", aud(totals.gstSalesTotal))}
       ${reportKpi("1A GST on Sales", aud(totals.fareGst))}
       ${reportKpi("1B Expense GST Credits", aud(totals.expenseGstCredit))}
       ${reportKpi("Net GST Payable", aud(totals.gstPayable))}
     </div>
     <h4>GST Ledger by Period</h4>
-    ${htmlTable(["Period", "GST on Sales", "Expense GST Credits", "GST Payable"], periodRows.map((row) => [row.label, aud(row.fareGst), aud(row.expenseGstCredit), aud(row.gstPayable)]))}
+    ${htmlTable(["Period", "G1 Sales", "GST on Sales", "Expense GST Credits", "GST Payable"], periodRows.map((row) => [row.label, aud(row.gstSalesTotal), aud(row.fareGst), aud(row.expenseGstCredit), aud(row.gstPayable)]))}
     <h4>GST Movement Chart</h4>
     ${renderDualBarChart(periodRows.map((row) => ({ label: row.label, left: row.fareGst, right: row.expenseGstCredit })), "Sales GST", "Credits")}
   `;
@@ -1868,6 +1872,7 @@ function computeForRange(from, to) {
   const fareGross = sum(fares, "gross");
   const fareGst = fares.reduce((a, x) => a + gstFromFare(x), 0);
   const tipExtra = fares.reduce((a, x) => a + n(x.tip_extra), 0);
+  const gstSalesTotal = fareGross + tipExtra;
   const platformFees = fares.reduce((a, x) => a + n(x.platform_fee), 0);
   const platformFeeGst = fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
   const fareAfterUberFee = round2(fareGross - platformFees);
@@ -1909,6 +1914,7 @@ function computeForRange(from, to) {
 
   return {
     fareGross,
+    gstSalesTotal,
     tipExtra,
     fareAfterUberFee,
     expenseTotal,
@@ -2105,6 +2111,7 @@ function renderTaxBreakdown() {
     <div class="tax-panel">
       <strong>GST Position</strong>
       <div class="meta">GST collected from fares versus GST credits from expenses and platform fees.</div>
+      ${line("G1 Total Sales incl Tips/Bonus", aud(m.gstSalesTotal))}
       ${line("GST on Sales (1A)", aud(m.fareGst))}
       ${line("Expense GST Credits (1B)", aud(m.expenseGstCredit))}
       ${line("Platform Fee GST (not deducted here)", aud(m.platformFeeGst))}
@@ -2245,7 +2252,8 @@ async function clearAllAccountData() {
   await refreshAll();
 }
 
-function gstFromFare(x) { return x.gst_included ? n(x.gross) / 11 : n(x.gross) * 0.1; }
+function gstSalesBaseForFare(x) { return n(x.gross) + n(x.tip_extra); }
+function gstFromFare(x) { return x.gst_included ? gstSalesBaseForFare(x) / 11 : gstSalesBaseForFare(x) * 0.1; }
 function netPayoutForFare(x) { return round2(n(x.net_payout || (n(x.gross) + n(x.tip_extra) - n(x.platform_fee)))); }
 function parseBoolish(value) {
   const text = String(value ?? "").trim().toLowerCase();
