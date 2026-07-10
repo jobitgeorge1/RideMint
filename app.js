@@ -6,6 +6,7 @@ if (window.__RIDEMINT_APP_LOADED__) {
 window.__RIDEMINT_APP_LOADED__ = true;
 
 const APP_KEY = "ridemint-pro-config";
+const FY_KEY = "ridemint-active-financial-year";
 const DEFAULT_SUPABASE_URL = window.RIDEMINT_CONFIG?.SUPABASE_URL || "";
 const DEFAULT_SUPABASE_ANON = window.RIDEMINT_CONFIG?.SUPABASE_ANON_KEY || "";
 const DEFAULT_TAX_SETTINGS = {
@@ -33,6 +34,7 @@ let db = { trips: [], fares: [], expenses: [], tolls: [], receipts: [], tax: nul
 let editing = { trips: null, fares: null, expenses: null, tolls: null };
 let activeTab = "dashboard";
 let activeReportKind = "executive";
+let activeFinancialYear = localStorage.getItem(FY_KEY) || String(currentFinancialYearEnd());
 let rowActionDelegatesBound = false;
 let lastRefreshAt = 0;
 
@@ -50,7 +52,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-07-04a (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-07-10a (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -59,7 +61,7 @@ function boot() {
   });
   if (el("fareForm")?.date) el("fareForm").date.value = weekRange(today).start;
   if (el("receiptDate")) el("receiptDate").value = today;
-  if (el("summaryYear")) el("summaryYear").value = new Date().getFullYear();
+  if (el("summaryYear")) el("summaryYear").value = currentFinancialYearEnd();
   wireEvents();
   setupTabs();
   showAuthPage("login");
@@ -96,6 +98,13 @@ function wireEvents() {
   bindClick("importWorkbookBtn", importWorkbook);
   bindClick("clearAllDataBtn", clearAllAccountData);
   bindClick("downloadAllReceiptsBtn", downloadAllReceiptsPdf);
+  el("financialYearSelect")?.addEventListener("change", async (evt) => {
+    activeFinancialYear = evt.target.value || "all";
+    localStorage.setItem(FY_KEY, activeFinancialYear);
+    if (activeFinancialYear !== "all" && el("summaryYear")) el("summaryYear").value = activeFinancialYear;
+    if (supabase && currentUser) await loadTax();
+    renderAll();
+  });
   el("receiptCameraInput")?.addEventListener("change", onReceiptSelected);
   el("receiptUploadInput")?.addEventListener("change", onReceiptSelected);
   bindClick("tripCancelEditBtn", () => clearEdit("trips"));
@@ -473,7 +482,12 @@ async function loadTable(table) {
 }
 
 async function loadTax() {
-  const { data, error } = await supabase.from("tax_settings").select("*").limit(1).maybeSingle();
+  const fy = taxFinancialYearKey();
+  let { data, error } = await supabase.from("tax_settings").select("*").eq("financial_year", fy).limit(1).maybeSingle();
+  if (!data && fy !== "all") {
+    const fallback = await supabase.from("tax_settings").select("*").eq("financial_year", "all").limit(1).maybeSingle();
+    if (fallback.data) data = { ...fallback.data, financial_year: fy, id: null };
+  }
   if (error) setStatus("taxStatus", `Tax settings load warning: ${error.message}`, true);
   db.tax = normalizeTaxSettings(data);
   const form = el("taxForm");
@@ -857,13 +871,14 @@ async function onSaveTax(e) {
   const f = e.target;
   const payload = {
     user_id: currentUser.id,
+    financial_year: taxFinancialYearKey(),
     other_income: n(f.other_income.value),
     super_contribution: n(f.super_contribution.value),
     deduction_method: validDeductionMethod(f.deduction_method?.value),
     cents_per_km_rate: n(f.cents_per_km_rate?.value || DEFAULT_TAX_SETTINGS.cents_per_km_rate),
     cents_per_km_cap: n(f.cents_per_km_cap?.value || DEFAULT_TAX_SETTINGS.cents_per_km_cap)
   };
-  const { data } = await supabase.from("tax_settings").select("id").limit(1).maybeSingle();
+  const { data } = await supabase.from("tax_settings").select("id").eq("financial_year", payload.financial_year).limit(1).maybeSingle();
   let result;
   if (data?.id) {
     result = await supabase.from("tax_settings").update(payload).eq("id", data.id);
@@ -878,14 +893,81 @@ async function onSaveTax(e) {
 }
 
 function renderAll() {
+  renderFinancialYearSelect();
   renderTripTable(); renderLogbookSummary(); renderIncomeSummaryTiles(); renderFareWeeklyTable(); renderExpenseSummaryTiles(); renderExpenseTable(); renderReceiptGrid(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
   updateAutoTaxPct();
 }
 
+function currentFinancialYearEnd(date = new Date()) {
+  const month = date.getMonth() + 1;
+  return month >= 7 ? date.getFullYear() + 1 : date.getFullYear();
+}
+
+function financialYearForDate(dateStr) {
+  const d = parseLocalDate(dateStr || today);
+  return d.getMonth() + 1 >= 7 ? d.getFullYear() + 1 : d.getFullYear();
+}
+
+function financialYearRange(fyEndYear) {
+  const year = Number(fyEndYear);
+  return { from: `${year - 1}-07-01`, to: `${year}-06-30`, label: `FY ${year - 1}-${String(year).slice(-2)}` };
+}
+
+function allDatedRows() {
+  return [...db.trips, ...db.fares, ...db.expenses, ...db.tolls, ...db.receipts.map((x) => ({ date: x.receipt_date }))].filter((x) => x.date);
+}
+
+function availableFinancialYears() {
+  const years = new Set(allDatedRows().map((x) => financialYearForDate(x.date)));
+  years.add(currentFinancialYearEnd());
+  return Array.from(years).sort((a, b) => b - a);
+}
+
+function isInActiveFinancialYear(dateStr) {
+  if (activeFinancialYear === "all") return true;
+  const range = financialYearRange(activeFinancialYear);
+  return dateStr >= range.from && dateStr <= range.to;
+}
+
+function scopedRows(rows, dateKey = "date") {
+  return activeFinancialYear === "all" ? rows : rows.filter((row) => isInActiveFinancialYear(row[dateKey]));
+}
+
+function scopedData() {
+  return {
+    trips: scopedRows(db.trips),
+    fares: scopedRows(db.fares),
+    expenses: scopedRows(db.expenses),
+    tolls: scopedRows(db.tolls),
+    receipts: scopedRows(db.receipts, "receipt_date"),
+    tax: db.tax,
+    platforms: db.platforms
+  };
+}
+
+function taxFinancialYearKey() {
+  return activeFinancialYear === "all" ? "all" : String(activeFinancialYear);
+}
+
+function renderFinancialYearSelect() {
+  const select = el("financialYearSelect");
+  if (!select) return;
+  const years = availableFinancialYears();
+  if (activeFinancialYear !== "all" && !years.includes(Number(activeFinancialYear))) activeFinancialYear = String(currentFinancialYearEnd());
+  const options = [`<option value="all">Overall - all years</option>`].concat(years.map((year) => {
+    const range = financialYearRange(year);
+    return `<option value="${year}">${range.label}</option>`;
+  }));
+  select.innerHTML = options.join("");
+  select.value = activeFinancialYear;
+  if (activeFinancialYear !== "all" && el("summaryYear")) el("summaryYear").value = activeFinancialYear;
+}
+
 function renderTripTable() {
+  const rows = scopedData().trips;
   el("tripTable").innerHTML = tableHtml(
     ["Date", "Purpose", "Start Odo", "End Odo", "KM", "Actions"],
-    db.trips.map((x) => [x.date, x.purpose, f2(x.odo_start), f2(x.odo_end), f2(x.km), actionBtns("trips", x.id)])
+    rows.map((x) => [x.date, x.purpose, f2(x.odo_start), f2(x.odo_end), f2(x.km), actionBtns("trips", x.id)])
   );
   bindRowActions();
 }
@@ -940,10 +1022,11 @@ function renderExpenseSummaryTiles() {
   el("expenseSummaryTiles").innerHTML = tiles.map(([label, value, tone]) => `<article class="summary-tile ${tone}"><span>${label}</span><strong>${value}</strong></article>`).join("");
 }
 function renderExpenseTable() {
+  const rows = scopedData().expenses;
   const businessUsePct = currentBusinessUsePct();
   el("expenseTable").innerHTML = tableHtml(
     ["Date", "Category", "Tax Type", "Amount", "GST Credit", "Actions"],
-    db.expenses.map((x) => [x.date, esc(x.category), isVehicleRunningExpense(x) ? "Vehicle" : "Other", aud(x.amount), aud(expenseGstCreditValue(x, businessUsePct)), actionBtns("expenses", x.id)])
+    rows.map((x) => [x.date, esc(x.category), isVehicleRunningExpense(x) ? "Vehicle" : "Other", aud(x.amount), aud(expenseGstCreditValue(x, businessUsePct)), actionBtns("expenses", x.id)])
   );
   bindRowActions();
 }
@@ -951,7 +1034,7 @@ function renderExpenseTable() {
 function renderReceiptGrid() {
   const grid = el("receiptGrid");
   if (!grid) return;
-  const rows = db.receipts || [];
+  const rows = scopedData().receipts || [];
   grid.innerHTML = rows.length ? rows.map((receipt) => `
     <article class="receipt-card">
       ${isPdfReceipt(receipt) ?
@@ -970,9 +1053,10 @@ function renderReceiptGrid() {
 }
 
 function renderTollTable() {
+  const rows = scopedData().tolls;
   el("tollTable").innerHTML = tableHtml(
     ["Date", "Amount", "Reimbursed", "Actions"],
-    db.tolls.map((x) => [x.date, aud(x.amount), x.reimbursed ? "Yes" : "No", actionBtns("tolls", x.id)])
+    rows.map((x) => [x.date, aud(x.amount), x.reimbursed ? "Yes" : "No", actionBtns("tolls", x.id)])
   );
   bindRowActions();
 }
@@ -1121,15 +1205,31 @@ function renderDashboardHero() {
 
 function renderLogbookSummary() {
   const m = computeMetrics();
+  const rows = scopedData().trips;
+  const ato = validateAtoLogbook(rows);
   if (!el("logbookSummary")) return;
   el("logbookSummary").innerHTML = `
     <div class="hero-metrics">
       <div class="hero-chip"><span>Total KM</span><strong>${f2(m.totalKm)}</strong></div>
       <div class="hero-chip"><span>Uber Trip KM</span><strong>${f2(m.businessKm)}</strong></div>
       <div class="hero-chip"><span>Business Use</span><strong>${pct(m.businessUsePct)}</strong></div>
-      <div class="hero-chip"><span>Trips Logged</span><strong>${db.trips.length}</strong></div>
+      <div class="hero-chip"><span>Trips Logged</span><strong>${rows.length}</strong></div>
+      <div class="hero-chip"><span>ATO Check</span><strong>${ato.ok ? "Ready" : "Needs Review"}</strong></div>
     </div>
+    <div class="small-note">${esc(ato.message)}</div>
   `;
+}
+
+function validateAtoLogbook(trips) {
+  if (!trips.length) return { ok: false, message: "No logbook entries in the selected financial-year view." };
+  const missing = trips.filter((t) => !t.date || !t.purpose || n(t.odo_end) <= n(t.odo_start) || n(t.km) <= 0);
+  const dates = trips.map((t) => t.date).filter(Boolean).sort();
+  const first = dates[0];
+  const last = dates[dates.length - 1];
+  const spanDays = first && last ? Math.round((parseLocalDate(last) - parseLocalDate(first)) / 86400000) + 1 : 0;
+  if (missing.length) return { ok: false, message: `${missing.length} entries need date, purpose, valid odometer readings, and positive kilometres.` };
+  if (spanDays < 84) return { ok: false, message: `Entries cover ${spanDays} days. A logbook-method claim generally needs a representative continuous 12-week logbook period.` };
+  return { ok: true, message: `Entries cover ${spanDays} days with dates, purpose, odometer readings, and kilometres present.` };
 }
 
 function normalizeTaxSettings(raw = {}) {
@@ -1188,30 +1288,30 @@ function computeDeductionModel({ expenses, businessUsePct, businessKm, superCont
   };
 }
 
-function computeMetrics(overrides = {}) {
-  const fareGross = sum(db.fares, "gross");
-  const fareGst = db.fares.reduce((a, x) => a + gstFromFare(x), 0);
-  const tipExtra = db.fares.reduce((a, x) => a + n(x.tip_extra), 0);
+function computeMetrics(overrides = {}, source = scopedData()) {
+  const fareGross = sum(source.fares, "gross");
+  const fareGst = source.fares.reduce((a, x) => a + gstFromFare(x), 0);
+  const tipExtra = source.fares.reduce((a, x) => a + n(x.tip_extra), 0);
   const gstSalesTotal = fareGross + tipExtra;
-  const platformFees = db.fares.reduce((a, x) => a + n(x.platform_fee), 0);
-  const platformFeeGst = db.fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
+  const platformFees = source.fares.reduce((a, x) => a + n(x.platform_fee), 0);
+  const platformFeeGst = source.fares.reduce((a, x) => a + n(x.platform_fee_gst), 0);
   const fareAfterUberFee = round2(fareGross - platformFees);
-  const netPayout = db.fares.reduce((a, x) => a + netPayoutForFare(x), 0);
-  const totalKm = sum(db.trips, "km");
-  const businessKm = db.trips.reduce((a, x) => a + (x.purpose === "Business" ? Number(x.km) : 0), 0);
+  const netPayout = source.fares.reduce((a, x) => a + netPayoutForFare(x), 0);
+  const totalKm = sum(source.trips, "km");
+  const businessKm = source.trips.reduce((a, x) => a + (x.purpose === "Business" ? Number(x.km) : 0), 0);
   const personalKm = Math.max(0, totalKm - businessKm);
   const businessUsePct = totalKm > 0 ? businessKm / totalKm : 0;
-  const expenseTotal = sum(db.expenses, "amount");
+  const expenseTotal = sum(source.expenses, "amount");
   const businessUseExpenseAmount = round2(expenseTotal * businessUsePct);
-  const expenseOnlyGstCredit = db.expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0);
+  const expenseOnlyGstCredit = source.expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0);
   const expenseGstCredit = expenseOnlyGstCredit;
-  const tollTotal = sum(db.tolls, "amount");
-  const reimbursedTolls = db.tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
+  const tollTotal = sum(source.tolls, "amount");
+  const reimbursedTolls = source.tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
   const taxSettings = taxSettingsWithOverrides(overrides);
   const otherIncome = n(taxSettings.other_income);
   const superContrib = n(taxSettings.super_contribution);
-  const deduction = computeDeductionModel({ expenses: db.expenses, businessUsePct, businessKm, superContrib, taxSettings });
+  const deduction = computeDeductionModel({ expenses: source.expenses, businessUsePct, businessKm, superContrib, taxSettings });
   const deductibleExpenses = deduction.deductibleExpenses;
   const rideshareTaxableIncome = Math.max(0, netPayout - gstPayable - deductibleExpenses);
   const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncome);
@@ -1230,7 +1330,7 @@ function computeMetrics(overrides = {}) {
   const inHand = balance;
   const rideshareEffectiveTaxRate = rideshareTaxableIncome > 0 ? uberTaxPayable / rideshareTaxableIncome : 0;
 
-  const monthsActive = Math.max(1, distinctMonths([...db.fares, ...db.expenses, ...db.tolls].map((x) => x.date)).size);
+  const monthsActive = Math.max(1, distinctMonths([...source.fares, ...source.expenses, ...source.tolls].map((x) => x.date)).size);
   const monthlyAvgNet = inHand / monthsActive;
   const effectiveTaxRate = taxableIncome > 0 ? totalTax / taxableIncome : 0;
   const recommendedReserve = taxableIncome * effectiveTaxRate;
@@ -1294,7 +1394,7 @@ function renderReport(forceType = null) {
   updateReportSwitcher();
   const report = buildReportModel(reportKind, period, year);
   updateReportActionLabels(report);
-  if (el("reportMeta")) el("reportMeta").textContent = `${report.title} | ${cap(period)} ${year} | ${report.exportLabel}`;
+  if (el("reportMeta")) el("reportMeta").textContent = `${report.title} | ${cap(period)} FY ending ${year} | ${report.exportLabel}`;
   el("reportArea").innerHTML = report.html;
 }
 
@@ -1369,7 +1469,7 @@ function downloadReportWorkbook(reportType = "full") {
     Notes: row.notes || ""
   }));
 
-  const allMetrics = computeMetrics();
+  const allMetrics = rangeMetrics;
   const overviewRows = [
     { Field: "Report Type", Value: reportType.toUpperCase() },
     { Field: "Summary Period", Value: cap(period) },
@@ -1850,9 +1950,10 @@ function openReportPdfView() {
 }
 
 function currentBusinessUsePct() {
-  const totalKm = sum(db.trips, "km");
+  const trips = scopedData().trips;
+  const totalKm = sum(trips, "km");
   if (totalKm <= 0) return 0;
-  const businessKm = db.trips.reduce((a, x) => a + (x.purpose === "Business" ? Number(x.km) : 0), 0);
+  const businessKm = trips.reduce((a, x) => a + (x.purpose === "Business" ? Number(x.km) : 0), 0);
   return businessKm / totalKm;
 }
 
@@ -1959,21 +2060,24 @@ function computeForRange(from, to) {
 }
 
 function bucketizeByPeriod(period, year) {
+  const fy = financialYearRange(year);
   if (period === "yearly") {
-    return [{ label: `${year}`, from: `${year}-01-01`, to: `${year}-12-31` }];
+    return [{ label: fy.label, from: fy.from, to: fy.to }];
   }
   if (period === "quarterly") {
     return [
-      { label: `Q1 (${year})`, from: `${year}-01-01`, to: `${year}-03-31` },
-      { label: `Q2 (${year})`, from: `${year}-04-01`, to: `${year}-06-30` },
-      { label: `Q3 (${year})`, from: `${year}-07-01`, to: `${year}-09-30` },
-      { label: `Q4 (${year})`, from: `${year}-10-01`, to: `${year}-12-31` }
+      { label: `Q1 ${fy.label}`, from: `${year - 1}-07-01`, to: `${year - 1}-09-30` },
+      { label: `Q2 ${fy.label}`, from: `${year - 1}-10-01`, to: `${year - 1}-12-31` },
+      { label: `Q3 ${fy.label}`, from: `${year}-01-01`, to: `${year}-03-31` },
+      { label: `Q4 ${fy.label}`, from: `${year}-04-01`, to: `${year}-06-30` }
     ];
   }
   return Array.from({ length: 12 }).map((_, i) => {
-    const month = String(i + 1).padStart(2, "0");
-    const last = new Date(year, i + 1, 0).getDate();
-    return { label: `${year}-${month}`, from: `${year}-${month}-01`, to: `${year}-${month}-${String(last).padStart(2, "0")}` };
+    const date = new Date(year - 1, 6 + i, 1);
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const calendarYear = date.getFullYear();
+    const last = new Date(calendarYear, date.getMonth() + 1, 0).getDate();
+    return { label: `${calendarYear}-${month}`, from: `${calendarYear}-${month}-01`, to: `${calendarYear}-${month}-${String(last).padStart(2, "0")}` };
   });
 }
 
@@ -2179,8 +2283,9 @@ function computeTaxBreakdown(rideshareTaxableIncome, otherIncome) {
 function allocateAnnualValueToRange(total, from, to) {
   const start = parseLocalDate(from);
   const end = parseLocalDate(to);
-  const yearStart = new Date(start.getFullYear(), 0, 1);
-  const yearEnd = new Date(start.getFullYear(), 11, 31);
+  const fyEnd = currentFinancialYearEnd(start);
+  const yearStart = new Date(fyEnd - 1, 6, 1);
+  const yearEnd = new Date(fyEnd, 5, 30);
   const clippedStart = start < yearStart ? yearStart : start;
   const clippedEnd = end > yearEnd ? yearEnd : end;
   const daysInRange = Math.max(0, Math.round((clippedEnd - clippedStart) / 86400000) + 1);
@@ -2190,7 +2295,7 @@ function allocateAnnualValueToRange(total, from, to) {
 
 function weeklyFareSummaries() {
   const totals = computeMetrics();
-  return db.fares
+  return scopedData().fares
     .slice()
     .sort((a, b) => String(b.date).localeCompare(String(a.date)))
     .map((fare) => {

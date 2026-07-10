@@ -22,7 +22,7 @@
     <header class="hero">
       <div>
         <h1>RideMint Ledger Pro</h1>
-        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-07-04a</p>
+        <p id="buildTag" style="margin-top:8px;font-size:0.78rem;color:#b8d2e5;">Build: RM-2026-07-10a</p>
       </div>
       <div class="hero-actions" id="topActions">
         <button id="printReportBtn" class="btn secondary hidden">Download Report</button>
@@ -82,6 +82,7 @@
             <p id="sectionSubtitle">Business snapshot and performance metrics.</p>
           </div>
           <div class="topbar-actions">
+            <label class="fy-filter">Financial Year <select id="financialYearSelect"></select></label>
             <button id="printReportBtn2" class="btn secondary">Download Report</button>
           </div>
         </div>
@@ -243,7 +244,7 @@
           <p class="small-note">Switch between operational, GST, tax, trend, expense and logbook reports. Each report now has its own view and export behavior.</p>
           <div class="grid2">
             <div><label>Summary Period</label><select id="summaryPeriod"><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select></div>
-            <div><label>Year</label><input id="summaryYear" type="number" min="2020" max="2100" /></div>
+            <div><label>Financial Year Ending</label><input id="summaryYear" type="number" min="2020" max="2100" /></div>
           </div>
           <div class="report-switcher" id="reportSwitcher">
             <button class="report-switch active" data-report-kind="executive" type="button">Executive Snapshot</button>

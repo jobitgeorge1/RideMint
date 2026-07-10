@@ -89,7 +89,8 @@ create table if not exists receipts (
 
 create table if not exists tax_settings (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null unique references auth.users(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  financial_year text not null default 'all',
   other_income numeric(12,2) not null default 0,
   super_contribution numeric(12,2) not null default 0,
   deduction_method text not null default 'logbook' check (deduction_method in ('logbook', 'cents_per_km')),
@@ -100,9 +101,12 @@ create table if not exists tax_settings (
   updated_at timestamptz default now()
 );
 
+alter table tax_settings add column if not exists financial_year text not null default 'all';
 alter table tax_settings add column if not exists deduction_method text not null default 'logbook';
 alter table tax_settings add column if not exists cents_per_km_rate numeric(6,2) not null default 0.88;
 alter table tax_settings add column if not exists cents_per_km_cap numeric(8,0) not null default 5000;
+alter table tax_settings drop constraint if exists tax_settings_user_id_key;
+create unique index if not exists tax_settings_user_fy_idx on tax_settings(user_id, financial_year);
 
 do $$
 begin

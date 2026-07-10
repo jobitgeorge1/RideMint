@@ -84,6 +84,20 @@ input:focus, select:focus {
 }
 .btn.secondary { background: rgba(255,255,255,0.88); color: var(--ink); border: 1px solid var(--line); box-shadow: none; }
 .btn.danger { background: var(--danger); }
+.fy-filter {
+  min-width: 190px;
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.fy-filter select {
+  margin-top: 4px;
+  min-height: 42px;
+  padding: 8px 12px;
+  font-size: 0.92rem;
+}
 .status { color: #0f5132; font-size: 0.88rem; min-height: 20px; }
 .hidden { display: none !important; }
 .link-btn { background: transparent; border: 0; color: #0f6ac5; cursor: pointer; font-weight: 700; padding: 0; }
