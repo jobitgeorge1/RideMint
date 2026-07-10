@@ -105,6 +105,14 @@ alter table tax_settings add column if not exists financial_year text not null d
 alter table tax_settings add column if not exists deduction_method text not null default 'logbook';
 alter table tax_settings add column if not exists cents_per_km_rate numeric(6,2) not null default 0.88;
 alter table tax_settings add column if not exists cents_per_km_cap numeric(8,0) not null default 5000;
+alter table tax_settings add column if not exists payg_tax_withheld numeric(12,2) not null default 0;
+alter table tax_settings add column if not exists tax_profile text not null default 'resident';
+alter table tax_settings add column if not exists medicare_levy_rate numeric(6,4) not null default 0.02;
+alter table tax_settings add column if not exists tax_slabs_json jsonb not null default
+  '[{"upto":18200,"rate":0,"label":"0% up to $18,200"},{"upto":45000,"rate":0.16,"label":"16% from $18,201 to $45,000"},{"upto":135000,"rate":0.30,"label":"30% from $45,001 to $135,000"},{"upto":190000,"rate":0.37,"label":"37% from $135,001 to $190,000"},{"upto":null,"rate":0.45,"label":"45% above $190,000"}]'::jsonb;
+alter table tax_settings add column if not exists is_locked boolean not null default false;
+alter table tax_settings add column if not exists return_lodged_date date;
+alter table tax_settings add column if not exists tax_notes text not null default '';
 alter table tax_settings drop constraint if exists tax_settings_user_id_key;
 create unique index if not exists tax_settings_user_fy_idx on tax_settings(user_id, financial_year);
 
@@ -139,6 +147,18 @@ create table if not exists platform_options (
   created_at timestamptz default now()
 );
 
+create table if not exists gst_payments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  financial_year text not null default 'all',
+  quarter text not null default 'Other' check (quarter in ('Q1', 'Q2', 'Q3', 'Q4', 'Annual', 'Other')),
+  payment_date date not null default current_date,
+  amount numeric(12,2) not null,
+  reference text,
+  notes text,
+  created_at timestamptz default now()
+);
+
 alter table profiles add column if not exists role text not null default 'driver';
 alter table profiles drop constraint if exists profiles_role_check;
 alter table profiles add constraint profiles_role_check check (role in ('admin', 'driver'));
@@ -152,6 +172,7 @@ alter table expenses enable row level security;
 alter table tolls enable row level security;
 alter table receipts enable row level security;
 alter table tax_settings enable row level security;
+alter table gst_payments enable row level security;
 alter table profiles enable row level security;
 alter table platform_options enable row level security;
 
@@ -199,6 +220,11 @@ drop policy if exists "tax owner write" on tax_settings;
 create policy "tax owner read" on tax_settings for select using (auth.uid() = user_id);
 create policy "tax owner write" on tax_settings for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists "gst payments owner read" on gst_payments;
+drop policy if exists "gst payments owner write" on gst_payments;
+create policy "gst payments owner read" on gst_payments for select using (auth.uid() = user_id);
+create policy "gst payments owner write" on gst_payments for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
 drop policy if exists "profiles owner read" on profiles;
 drop policy if exists "profiles owner upsert own" on profiles;
 drop policy if exists "profiles owner update own" on profiles;
@@ -224,6 +250,7 @@ create index if not exists fares_user_date_idx on fares(user_id, date desc);
 create index if not exists expenses_user_date_idx on expenses(user_id, date desc);
 create index if not exists tolls_user_date_idx on tolls(user_id, date desc);
 create index if not exists receipts_user_date_idx on receipts(user_id, receipt_date desc);
+create index if not exists gst_payments_user_fy_idx on gst_payments(user_id, financial_year, payment_date desc);
 
 create or replace function public.handle_new_user()
 returns trigger

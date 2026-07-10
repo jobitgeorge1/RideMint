@@ -9,12 +9,26 @@ const APP_KEY = "ridemint-pro-config";
 const FY_KEY = "ridemint-active-financial-year";
 const DEFAULT_SUPABASE_URL = window.RIDEMINT_CONFIG?.SUPABASE_URL || "";
 const DEFAULT_SUPABASE_ANON = window.RIDEMINT_CONFIG?.SUPABASE_ANON_KEY || "";
+const DEFAULT_TAX_SLABS = [
+  { upto: 18200, rate: 0, label: "0% up to $18,200" },
+  { upto: 45000, rate: 0.16, label: "16% from $18,201 to $45,000" },
+  { upto: 135000, rate: 0.30, label: "30% from $45,001 to $135,000" },
+  { upto: 190000, rate: 0.37, label: "37% from $135,001 to $190,000" },
+  { upto: null, rate: 0.45, label: "45% above $190,000" }
+];
 const DEFAULT_TAX_SETTINGS = {
   other_income: 0,
+  payg_tax_withheld: 0,
   super_contribution: 0,
   deduction_method: "logbook",
   cents_per_km_rate: 0.88,
-  cents_per_km_cap: 5000
+  cents_per_km_cap: 5000,
+  tax_profile: "resident",
+  medicare_levy_rate: 0.02,
+  tax_slabs_json: JSON.stringify(DEFAULT_TAX_SLABS, null, 2),
+  is_locked: false,
+  return_lodged_date: "",
+  tax_notes: ""
 };
 const VEHICLE_RUNNING_EXPENSE_CATEGORIES = new Set([
   "fuel",
@@ -30,7 +44,7 @@ let supabase = null;
 let currentUser = null;
 let currentProfile = null;
 let isAdmin = false;
-let db = { trips: [], fares: [], expenses: [], tolls: [], receipts: [], tax: null, platforms: [] };
+let db = { trips: [], fares: [], expenses: [], tolls: [], receipts: [], gst_payments: [], tax: null, platforms: [] };
 let editing = { trips: null, fares: null, expenses: null, tolls: null };
 let activeTab = "dashboard";
 let activeReportKind = "executive";
@@ -52,7 +66,7 @@ if (document.readyState === "loading") {
 }
 
 function boot() {
-  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-07-10a (JS active)";
+  if (el("buildTag")) el("buildTag").textContent = "Build: RM-2026-07-10b (JS active)";
   registerServiceWorker();
   setStatus("authStatus", "Login to continue.");
   ["tripForm", "expenseForm", "tollForm"].forEach((id) => {
@@ -61,6 +75,7 @@ function boot() {
   });
   if (el("fareForm")?.date) el("fareForm").date.value = weekRange(today).start;
   if (el("receiptDate")) el("receiptDate").value = today;
+  if (el("gstPaymentDate")) el("gstPaymentDate").value = today;
   if (el("summaryYear")) el("summaryYear").value = currentFinancialYearEnd();
   wireEvents();
   setupTabs();
@@ -82,6 +97,7 @@ function wireEvents() {
   bindSubmit("expenseForm", onAddExpense);
   bindSubmit("tollForm", onAddToll);
   bindSubmit("taxForm", onSaveTax);
+  bindSubmit("gstPaymentForm", onAddGstPayment);
 
   bindClick("refreshSummaryBtn", renderReport);
   bindClick("reportPdfBtn", openReportPdfView);
@@ -113,6 +129,7 @@ function wireEvents() {
   bindClick("tollCancelEditBtn", () => clearEdit("tolls"));
   bindFareFeeAutoCalc();
   bindFareWeekFields();
+  bindGstPaymentQuarter();
   bindTaxLivePreview();
   bindExpenseGstCalc();
   bindReportSwitcher();
@@ -153,10 +170,19 @@ function bindFareWeekFields() {
   updateFareWeekFields();
 }
 
+function bindGstPaymentQuarter() {
+  const form = el("gstPaymentForm");
+  if (!form?.payment_date || !form?.quarter) return;
+  form.payment_date.addEventListener("change", () => {
+    form.quarter.value = suggestedBasQuarter(form.payment_date.value);
+  });
+  form.quarter.value = suggestedBasQuarter(form.payment_date.value || today);
+}
+
 function bindTaxLivePreview() {
   const form = el("taxForm");
   if (!form) return;
-  ["other_income", "super_contribution", "deduction_method", "cents_per_km_rate", "cents_per_km_cap"].forEach((name) => {
+  ["other_income", "payg_tax_withheld", "super_contribution", "deduction_method", "cents_per_km_rate", "cents_per_km_cap", "tax_profile", "medicare_levy_rate", "tax_slabs_json", "is_locked", "return_lodged_date", "tax_notes"].forEach((name) => {
     form[name]?.addEventListener("input", () => {
       updateAutoTaxPct();
       renderTaxBreakdown();
@@ -271,7 +297,7 @@ async function initSupabase(url, anon) {
       } else {
         currentProfile = null;
         isAdmin = false;
-        db = { trips: [], fares: [], expenses: [], tolls: [], receipts: [], tax: null, platforms: [] };
+        db = { trips: [], fares: [], expenses: [], tolls: [], receipts: [], gst_payments: [], tax: null, platforms: [] };
         renderAll();
       }
       toggleApp();
@@ -359,7 +385,7 @@ async function logout() {
   currentUser = null;
   currentProfile = null;
   isAdmin = false;
-  db = { trips: [], fares: [], expenses: [], tolls: [], receipts: [], tax: null, platforms: [] };
+  db = { trips: [], fares: [], expenses: [], tolls: [], receipts: [], gst_payments: [], tax: null, platforms: [] };
   editing = { trips: null, fares: null, expenses: null, tolls: null };
   toggleApp();
   renderAll();
@@ -416,7 +442,7 @@ async function refreshAll(force = false) {
   lastRefreshAt = now;
   await loadProfile();
   applyAdminVisibility();
-  await Promise.all([loadTable("trips"), loadTable("fares"), loadTable("expenses"), loadTable("tolls"), loadTable("receipts"), loadTax(), loadPlatformOptions()]);
+  await Promise.all([loadTable("trips"), loadTable("fares"), loadTable("expenses"), loadTable("tolls"), loadTable("receipts"), loadTable("gst_payments"), loadTax(), loadPlatformOptions()]);
   prefillTripStartOdo();
   renderAll();
   if (isAdmin) {
@@ -475,7 +501,7 @@ async function updateUserRole() {
 }
 
 async function loadTable(table) {
-  const orderColumn = table === "receipts" ? "receipt_date" : "date";
+  const orderColumn = table === "receipts" ? "receipt_date" : table === "gst_payments" ? "payment_date" : "date";
   const { data, error } = await supabase.from(table).select("*").order(orderColumn, { ascending: false });
   if (error) return;
   db[table] = data || [];
@@ -492,10 +518,18 @@ async function loadTax() {
   db.tax = normalizeTaxSettings(data);
   const form = el("taxForm");
   form.other_income.value = db.tax.other_income || 0;
+  if (form.payg_tax_withheld) form.payg_tax_withheld.value = db.tax.payg_tax_withheld || 0;
   form.super_contribution.value = db.tax.super_contribution || 0;
   if (form.deduction_method) form.deduction_method.value = db.tax.deduction_method;
   if (form.cents_per_km_rate) form.cents_per_km_rate.value = db.tax.cents_per_km_rate;
   if (form.cents_per_km_cap) form.cents_per_km_cap.value = db.tax.cents_per_km_cap;
+  if (form.tax_profile) form.tax_profile.value = db.tax.tax_profile || "resident";
+  if (form.medicare_levy_rate) form.medicare_levy_rate.value = db.tax.medicare_levy_rate;
+  if (form.tax_slabs_json) form.tax_slabs_json.value = db.tax.tax_slabs_json || DEFAULT_TAX_SETTINGS.tax_slabs_json;
+  if (form.is_locked) form.is_locked.checked = !!db.tax.is_locked;
+  if (form.return_lodged_date) form.return_lodged_date.value = db.tax.return_lodged_date || "";
+  if (form.tax_notes) form.tax_notes.value = db.tax.tax_notes || "";
+  applyTaxLockState();
 }
 
 function updateAutoTaxPct() {
@@ -866,17 +900,52 @@ async function onAddToll(e) {
   await refreshAll();
 }
 
+async function onAddGstPayment(e) {
+  e.preventDefault();
+  const f = e.target;
+  const amount = n(f.amount.value);
+  if (amount <= 0) return setStatus("gstPaymentStatus", "Enter a GST payment amount.", true);
+  const payload = {
+    user_id: currentUser.id,
+    financial_year: taxFinancialYearKey(),
+    quarter: f.quarter.value || suggestedBasQuarter(f.payment_date.value),
+    payment_date: f.payment_date.value,
+    amount,
+    reference: f.reference.value || "",
+    notes: f.notes.value || ""
+  };
+  const { error } = await supabase.from("gst_payments").insert(payload);
+  if (error) return setStatus("gstPaymentStatus", `GST payment save failed: ${error.message}. Run the latest supabase.sql migration.`, true);
+  f.reset();
+  if (f.payment_date) f.payment_date.value = today;
+  if (f.quarter) f.quarter.value = suggestedBasQuarter(today);
+  setStatus("gstPaymentStatus", "GST/BAS payment saved.");
+  await refreshAll(true);
+}
+
 async function onSaveTax(e) {
   e.preventDefault();
   const f = e.target;
+  if (db.tax?.is_locked && f.is_locked?.checked) {
+    return setStatus("taxStatus", "This financial year is locked. Untick the lock box and save once to unlock before changing settings.", true);
+  }
+  const slabs = parseTaxSlabsInput(f.tax_slabs_json?.value);
+  if (!slabs.ok) return setStatus("taxStatus", slabs.message, true);
   const payload = {
     user_id: currentUser.id,
     financial_year: taxFinancialYearKey(),
     other_income: n(f.other_income.value),
+    payg_tax_withheld: n(f.payg_tax_withheld?.value),
     super_contribution: n(f.super_contribution.value),
     deduction_method: validDeductionMethod(f.deduction_method?.value),
     cents_per_km_rate: n(f.cents_per_km_rate?.value || DEFAULT_TAX_SETTINGS.cents_per_km_rate),
-    cents_per_km_cap: n(f.cents_per_km_cap?.value || DEFAULT_TAX_SETTINGS.cents_per_km_cap)
+    cents_per_km_cap: n(f.cents_per_km_cap?.value || DEFAULT_TAX_SETTINGS.cents_per_km_cap),
+    tax_profile: f.tax_profile?.value || DEFAULT_TAX_SETTINGS.tax_profile,
+    medicare_levy_rate: n(f.medicare_levy_rate?.value ?? DEFAULT_TAX_SETTINGS.medicare_levy_rate),
+    tax_slabs_json: slabs.json,
+    is_locked: !!f.is_locked?.checked,
+    return_lodged_date: f.return_lodged_date?.value || null,
+    tax_notes: f.tax_notes?.value || ""
   };
   const { data } = await supabase.from("tax_settings").select("id").eq("financial_year", payload.financial_year).limit(1).maybeSingle();
   let result;
@@ -886,16 +955,17 @@ async function onSaveTax(e) {
     result = await supabase.from("tax_settings").insert(payload);
   }
   if (result?.error) {
-    return setStatus("taxStatus", `Tax settings save failed: ${result.error.message}. Run the latest supabase.sql migration if this mentions deduction_method or cents_per_km.`, true);
+    return setStatus("taxStatus", `Tax settings save failed: ${result.error.message}. Run the latest supabase.sql migration if this mentions a missing tax_settings column.`, true);
   }
-  setStatus("taxStatus", "Tax settings saved.");
+  setStatus("taxStatus", payload.is_locked ? "Tax settings saved and this financial year is locked." : "Tax settings saved.");
   await refreshAll();
 }
 
 function renderAll() {
   renderFinancialYearSelect();
-  renderTripTable(); renderLogbookSummary(); renderIncomeSummaryTiles(); renderFareWeeklyTable(); renderExpenseSummaryTiles(); renderExpenseTable(); renderReceiptGrid(); renderTollTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
+  renderTripTable(); renderLogbookSummary(); renderIncomeSummaryTiles(); renderFareWeeklyTable(); renderExpenseSummaryTiles(); renderExpenseTable(); renderReceiptGrid(); renderTollTable(); renderGstPaymentsTable(); renderKpis(); renderDashboardHero(); renderReport(); renderTaxBreakdown();
   updateAutoTaxPct();
+  applyTaxLockState();
 }
 
 function currentFinancialYearEnd(date = new Date()) {
@@ -914,7 +984,7 @@ function financialYearRange(fyEndYear) {
 }
 
 function allDatedRows() {
-  return [...db.trips, ...db.fares, ...db.expenses, ...db.tolls, ...db.receipts.map((x) => ({ date: x.receipt_date }))].filter((x) => x.date);
+  return [...db.trips, ...db.fares, ...db.expenses, ...db.tolls, ...db.receipts.map((x) => ({ date: x.receipt_date })), ...db.gst_payments.map((x) => ({ date: x.payment_date }))].filter((x) => x.date);
 }
 
 function availableFinancialYears() {
@@ -940,6 +1010,7 @@ function scopedData() {
     expenses: scopedRows(db.expenses),
     tolls: scopedRows(db.tolls),
     receipts: scopedRows(db.receipts, "receipt_date"),
+    gst_payments: activeFinancialYear === "all" ? db.gst_payments : db.gst_payments.filter((row) => row.financial_year === taxFinancialYearKey() || isInActiveFinancialYear(row.payment_date)),
     tax: db.tax,
     platforms: db.platforms
   };
@@ -1059,6 +1130,24 @@ function renderTollTable() {
     rows.map((x) => [x.date, aud(x.amount), x.reimbursed ? "Yes" : "No", actionBtns("tolls", x.id)])
   );
   bindRowActions();
+}
+
+function renderGstPaymentsTable() {
+  const table = el("gstPaymentsTable");
+  if (!table) return;
+  const rows = scopedData().gst_payments || [];
+  table.innerHTML = tableHtml(
+    ["Date", "Quarter", "Amount Paid", "Reference", "Actions"],
+    rows.map((x) => [x.payment_date, esc(x.quarter || suggestedBasQuarter(x.payment_date)), aud(x.amount), esc(x.reference || x.notes || ""), delBtn("gst_payments", x.id)])
+  );
+  const m = computeMetrics(readDraftTaxValues());
+  if (el("gstPaymentSummary")) {
+    el("gstPaymentSummary").innerHTML = `
+      <article class="summary-tile kpi-tone-4"><span>GST Payable</span><strong>${aud(m.gstPayable)}</strong></article>
+      <article class="summary-tile kpi-tone-2"><span>ATO Payments</span><strong>${aud(m.gstPayments)}</strong></article>
+      <article class="summary-tile kpi-tone-5"><span>GST Outstanding</span><strong>${aud(m.gstOutstanding)}</strong></article>
+    `;
+  }
 }
 
 async function onReceiptSelected(evt) {
@@ -1237,10 +1326,17 @@ function normalizeTaxSettings(raw = {}) {
     ...DEFAULT_TAX_SETTINGS,
     ...(raw || {}),
     other_income: n(raw?.other_income ?? DEFAULT_TAX_SETTINGS.other_income),
+    payg_tax_withheld: n(raw?.payg_tax_withheld ?? DEFAULT_TAX_SETTINGS.payg_tax_withheld),
     super_contribution: n(raw?.super_contribution ?? DEFAULT_TAX_SETTINGS.super_contribution),
     deduction_method: validDeductionMethod(raw?.deduction_method),
     cents_per_km_rate: n(raw?.cents_per_km_rate ?? DEFAULT_TAX_SETTINGS.cents_per_km_rate),
-    cents_per_km_cap: n(raw?.cents_per_km_cap ?? DEFAULT_TAX_SETTINGS.cents_per_km_cap)
+    cents_per_km_cap: n(raw?.cents_per_km_cap ?? DEFAULT_TAX_SETTINGS.cents_per_km_cap),
+    tax_profile: raw?.tax_profile || DEFAULT_TAX_SETTINGS.tax_profile,
+    medicare_levy_rate: n(raw?.medicare_levy_rate ?? DEFAULT_TAX_SETTINGS.medicare_levy_rate),
+    tax_slabs_json: stringifyTaxSlabs(raw?.tax_slabs_json ?? DEFAULT_TAX_SETTINGS.tax_slabs_json),
+    is_locked: !!raw?.is_locked,
+    return_lodged_date: raw?.return_lodged_date || "",
+    tax_notes: raw?.tax_notes || ""
   };
 }
 
@@ -1308,6 +1404,8 @@ function computeMetrics(overrides = {}, source = scopedData()) {
   const tollTotal = sum(source.tolls, "amount");
   const reimbursedTolls = source.tolls.reduce((a, x) => a + (x.reimbursed ? x.amount : 0), 0);
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
+  const gstPayments = sum(source.gst_payments || [], "amount");
+  const gstOutstanding = round2(gstPayable - gstPayments);
   const taxSettings = taxSettingsWithOverrides(overrides);
   const otherIncome = n(taxSettings.other_income);
   const superContrib = n(taxSettings.super_contribution);
@@ -1315,13 +1413,13 @@ function computeMetrics(overrides = {}, source = scopedData()) {
   const deductibleExpenses = deduction.deductibleExpenses;
   const rideshareTaxableIncome = Math.max(0, netPayout - gstPayable - deductibleExpenses);
   const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncome);
-  const taxBreakdown = computeTaxBreakdown(rideshareTaxableIncome, otherIncome);
+  const taxBreakdown = computeTaxBreakdown(rideshareTaxableIncome, otherIncome, taxSettings);
   const incomeTax = taxBreakdown.incomeTax;
   const medicare = taxBreakdown.medicare;
   const totalTax = taxBreakdown.totalTax;
   const uberTaxPayable = taxBreakdown.uberTaxPayable;
   const otherIncomeTaxPaid = taxBreakdown.otherIncomeTaxPaid;
-  const slab = taxSlabForIncome(taxableIncome);
+  const slab = taxSlabForIncome(taxableIncome, taxSlabsFromSettings(taxSettings));
 
   const preTaxBalance = netPayout - gstPayable - expenseTotal;
   const dashboardTaxableIncome = rideshareTaxableIncome;
@@ -1369,6 +1467,8 @@ function computeMetrics(overrides = {}, source = scopedData()) {
     uberTaxPayable,
     otherIncomeTaxPaid,
     gstPayable,
+    gstPayments,
+    gstOutstanding,
     preTaxBalance,
     dashboardTaxableIncome,
     afterTaxIncome,
@@ -1413,6 +1513,8 @@ function downloadReportWorkbook(reportType = "full") {
       GST_Collected: round2(metrics.fareGst),
       GST_Credits: round2(metrics.expenseGstCredit),
       GST_Payable: round2(metrics.gstPayable),
+      GST_Payments_To_ATO: round2(metrics.gstPayments),
+      GST_Outstanding: round2(metrics.gstOutstanding),
       Deduction_Method: deductionMethodLabel(metrics.deductionMethod),
       Deductible_Expenses: round2(metrics.deductibleExpenses),
       Cents_Per_KM_Deduction: round2(metrics.centsPerKmDeduction),
@@ -1423,6 +1525,7 @@ function downloadReportWorkbook(reportType = "full") {
       Total_Taxable_Income: round2(metrics.taxableIncome),
       Income_Tax_Payable: round2(metrics.uberTaxPayable),
       Estimated_PAYG_Tax_on_Other_Income: round2(metrics.otherIncomeTaxPaid),
+      PAYG_Tax_Withheld_Input: round2(n(db.tax?.payg_tax_withheld || 0)),
       Tax_Medicare: round2(metrics.totalTax),
       Balance: round2(metrics.balance)
     };
@@ -1458,6 +1561,14 @@ function downloadReportWorkbook(reportType = "full") {
     Amount: round2(row.amount),
     Reimbursed: row.reimbursed ? "Yes" : "No"
   }));
+  const gstPayments = db.gst_payments.filter((row) => row.payment_date >= startDate && row.payment_date <= endDate).map((row) => ({
+    Payment_Date: row.payment_date,
+    Financial_Year: row.financial_year || "",
+    Quarter: row.quarter || "",
+    Amount: round2(row.amount),
+    Reference: row.reference || "",
+    Notes: row.notes || ""
+  }));
   const trips = filterByRange(db.trips).map((row) => ({
     Date: row.date,
     Purpose: row.purpose,
@@ -1485,6 +1596,8 @@ function downloadReportWorkbook(reportType = "full") {
     { Field: "Expenses", Value: round2(allMetrics.expenseTotal) },
     { Field: "Business Use %", Value: round2(allMetrics.businessUsePct * 100) },
     { Field: "GST Payable", Value: round2(allMetrics.gstPayable) },
+    { Field: "GST Payments to ATO", Value: round2(allMetrics.gstPayments) },
+    { Field: "GST Outstanding / Credit", Value: round2(allMetrics.gstOutstanding) },
     { Field: "Deduction Method", Value: deductionMethodLabel(allMetrics.deductionMethod) },
     { Field: "Deductible Expenses", Value: round2(allMetrics.deductibleExpenses) },
     { Field: "Cents per KM Deduction", Value: round2(allMetrics.centsPerKmDeduction) },
@@ -1495,6 +1608,11 @@ function downloadReportWorkbook(reportType = "full") {
     { Field: "Total Taxable Income", Value: round2(allMetrics.taxableIncome) },
     { Field: "Income Tax Payable", Value: round2(allMetrics.uberTaxPayable) },
     { Field: "Estimated PAYG Tax on Other Income", Value: round2(allMetrics.otherIncomeTaxPaid) },
+    { Field: "PAYG Tax Withheld Input", Value: round2(n(db.tax?.payg_tax_withheld || 0)) },
+    { Field: "Tax Profile", Value: db.tax?.tax_profile || "resident" },
+    { Field: "Medicare Levy Rate %", Value: round2(n(db.tax?.medicare_levy_rate || 0) * 100) },
+    { Field: "Financial Year Locked", Value: db.tax?.is_locked ? "Yes" : "No" },
+    { Field: "Return Lodged Date", Value: db.tax?.return_lodged_date || "" },
     { Field: "Tax + Medicare", Value: round2(allMetrics.totalTax) },
     { Field: "Effective Tax %", Value: round2(allMetrics.effectiveTaxRate * 100) },
     { Field: "Balance", Value: round2(allMetrics.balance) }
@@ -1504,11 +1622,18 @@ function downloadReportWorkbook(reportType = "full") {
     GST_on_Sales_1A: round2(allMetrics.fareGst),
     Expense_GST_Credits_1B: round2(allMetrics.expenseGstCredit),
     Platform_Fee_GST_Info: round2(allMetrics.platformFeeGst || 0),
-    Net_GST_Payable: round2(allMetrics.gstPayable)
+    Net_GST_Payable: round2(allMetrics.gstPayable),
+    GST_Payments_To_ATO: round2(allMetrics.gstPayments),
+    GST_Outstanding: round2(allMetrics.gstOutstanding)
   }];
   const taxRows = [{
     Other_Income: round2(n(db.tax?.other_income || 0)),
+    PAYG_Tax_Withheld_Input: round2(n(db.tax?.payg_tax_withheld || 0)),
     Super_Contribution: round2(n(db.tax?.super_contribution || 0)),
+    Tax_Profile: db.tax?.tax_profile || "resident",
+    Medicare_Levy_Rate: round2(n(db.tax?.medicare_levy_rate || 0)),
+    Financial_Year_Locked: db.tax?.is_locked ? "Yes" : "No",
+    Return_Lodged_Date: db.tax?.return_lodged_date || "",
     Deduction_Method: deductionMethodLabel(allMetrics.deductionMethod),
     Deductible_Expenses: round2(allMetrics.deductibleExpenses),
     Vehicle_Expense_Deduction: round2(allMetrics.vehicleExpenseDeduction),
@@ -1569,8 +1694,11 @@ function downloadReportWorkbook(reportType = "full") {
         G1_Sales_Including_Tips: row.G1_Sales_Including_Tips,
         GST_Collected: row.GST_Collected,
         Expense_GST_Credits: row.GST_Credits,
-        GST_Payable: row.GST_Payable
+        GST_Payable: row.GST_Payable,
+        GST_Payments_To_ATO: row.GST_Payments_To_ATO,
+        GST_Outstanding: row.GST_Outstanding
       }))],
+      ["GST Payments", gstPayments],
       ["Fares", fares],
       ["Expenses", expenses]
     ],
@@ -1615,6 +1743,7 @@ function downloadReportWorkbook(reportType = "full") {
       ["Fares", fares],
       ["Expenses", expenses],
       ["Tolls", tolls],
+      ["GST Payments", gstPayments],
       ["Logbook", trips]
     ]
   };
@@ -1738,10 +1867,10 @@ function renderBasReport(period, year, totals, periodRows) {
       ${reportKpi("G1 Total Sales", aud(totals.gstSalesTotal))}
       ${reportKpi("1A GST on Sales", aud(totals.fareGst))}
       ${reportKpi("1B Expense GST Credits", aud(totals.expenseGstCredit))}
-      ${reportKpi("Net GST Payable", aud(totals.gstPayable))}
+      ${reportKpi("GST Outstanding", aud(totals.gstOutstanding))}
     </div>
     <h4>GST Ledger by Period</h4>
-    ${htmlTable(["Period", "G1 Sales", "GST on Sales", "Expense GST Credits", "GST Payable"], periodRows.map((row) => [row.label, aud(row.gstSalesTotal), aud(row.fareGst), aud(row.expenseGstCredit), aud(row.gstPayable)]))}
+    ${htmlTable(["Period", "G1 Sales", "GST on Sales", "Expense GST Credits", "GST Payable", "ATO Payments", "Outstanding"], periodRows.map((row) => [row.label, aud(row.gstSalesTotal), aud(row.fareGst), aud(row.expenseGstCredit), aud(row.gstPayable), aud(row.gstPayments), aud(row.gstOutstanding)]))}
     <h4>GST Movement Chart</h4>
     ${renderDualBarChart(periodRows.map((row) => ({ label: row.label, left: row.fareGst, right: row.expenseGstCredit })), "Sales GST", "Credits")}
   `;
@@ -1770,7 +1899,9 @@ function renderTaxReport(period, year, totals, periodRows) {
       ${totals.deductionMethod === "cents_per_km" ? line("Other Business Expense Deduction", aud(totals.otherExpenseDeduction)) : ""}
       ${line("Total Tax", aud(totals.totalTax))}
       ${line("Medicare Levy", aud(totals.medicare))}
-      ${line("Current Slab", esc(taxSlabForIncome(totals.taxableIncome).label))}
+      ${line("Current Slab", esc(taxSlabForIncome(totals.taxableIncome, taxSlabsFromSettings(db.tax)).label))}
+      ${line("Tax Profile", esc(db.tax?.tax_profile || "resident"))}
+      ${line("FY Locked", db.tax?.is_locked ? "Yes" : "No")}
     </div>
     <h4>Period Tax Table</h4>
     ${htmlTable(["Period", "Method", "Deduction", "Rideshare Taxable", "Total Taxable", "Income Tax Payable", "Estimated PAYG", "Balance"], periodRows.map((row) => [row.label, deductionMethodLabel(row.deductionMethod), aud(row.deductibleExpenses), aud(row.rideshareTaxableIncome), aud(row.taxableIncome), aud(row.uberTaxPayable), aud(row.otherIncomeTaxPaid), aud(row.balance)]))}
@@ -1918,10 +2049,10 @@ function downloadReportCsv(kind) {
     headers = ["date", "purpose", "odo_start", "odo_end", "km", "notes"];
     rows = db.trips.filter((row) => row.date >= startDate && row.date <= endDate).map((row) => [row.date, row.purpose, row.odo_start, row.odo_end, row.km, row.notes || ""]);
   } else {
-    headers = ["period", "fare", "gst_collected", "gst_credits", "gst_payable", "deduction_method", "deductible_expenses", "cents_per_km_deduction", "cents_per_km_used", "rideshare_taxable_income", "total_taxable_income", "income_tax_payable", "balance"];
+    headers = ["period", "fare", "gst_collected", "gst_credits", "gst_payable", "gst_payments_to_ato", "gst_outstanding", "deduction_method", "deductible_expenses", "cents_per_km_deduction", "cents_per_km_used", "rideshare_taxable_income", "total_taxable_income", "income_tax_payable", "balance"];
     rows = bucketizeByPeriod(period, year).map((bucket) => {
       const row = computeForRange(bucket.from, bucket.to);
-      return [bucket.label, round2(row.fareGross), round2(row.fareGst), round2(row.expenseGstCredit), round2(row.gstPayable), deductionMethodLabel(row.deductionMethod), round2(row.deductibleExpenses), round2(row.centsPerKmDeduction), round2(row.cappedBusinessKm), round2(row.rideshareTaxableIncome), round2(row.taxableIncome), round2(row.uberTaxPayable), round2(row.balance)];
+      return [bucket.label, round2(row.fareGross), round2(row.fareGst), round2(row.expenseGstCredit), round2(row.gstPayable), round2(row.gstPayments), round2(row.gstOutstanding), deductionMethodLabel(row.deductionMethod), round2(row.deductibleExpenses), round2(row.centsPerKmDeduction), round2(row.cappedBusinessKm), round2(row.rideshareTaxableIncome), round2(row.taxableIncome), round2(row.uberTaxPayable), round2(row.balance)];
     });
   }
   const lines = [headers.join(",")].concat(rows.map((row) => row.map(csvCell).join(",")));
@@ -1969,6 +2100,7 @@ function computeForRange(from, to) {
   const expenses = db.expenses.filter((x) => inRange(x.date));
   const tolls = db.tolls.filter((x) => inRange(x.date));
   const trips = db.trips.filter((x) => inRange(x.date));
+  const gstPaymentsRows = db.gst_payments.filter((x) => inRange(x.payment_date));
 
   const fareGross = sum(fares, "gross");
   const fareGst = fares.reduce((a, x) => a + gstFromFare(x), 0);
@@ -1990,19 +2122,22 @@ function computeForRange(from, to) {
   const expenseOnlyGstCredit = expenses.reduce((a, x) => a + expenseGstCreditValue(x, businessUsePct), 0);
   const expenseGstCredit = expenseOnlyGstCredit;
   const gstPayable = Math.max(0, fareGst - expenseGstCredit);
+  const gstPayments = sum(gstPaymentsRows, "amount");
+  const gstOutstanding = round2(gstPayable - gstPayments);
   const otherIncomeAllocated = allocateAnnualValueToRange(n(db.tax?.other_income || 0), from, to);
   const superAllocated = allocateAnnualValueToRange(n(db.tax?.super_contribution || 0), from, to);
   const taxSettings = normalizeTaxSettings({
     ...(db.tax || DEFAULT_TAX_SETTINGS),
     other_income: otherIncomeAllocated,
     super_contribution: superAllocated,
-    cents_per_km_cap: allocateAnnualValueToRange(n(db.tax?.cents_per_km_cap ?? DEFAULT_TAX_SETTINGS.cents_per_km_cap), from, to)
+    cents_per_km_cap: allocateAnnualValueToRange(n(db.tax?.cents_per_km_cap ?? DEFAULT_TAX_SETTINGS.cents_per_km_cap), from, to),
+    payg_tax_withheld: allocateAnnualValueToRange(n(db.tax?.payg_tax_withheld || 0), from, to)
   });
   const deduction = computeDeductionModel({ expenses, businessUsePct, businessKm, superContrib: superAllocated, taxSettings });
   const deductibleExpenses = deduction.deductibleExpenses;
   const rideshareTaxableIncome = Math.max(0, netPayout - gstPayable - deductibleExpenses);
   const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncomeAllocated);
-  const taxBreakdown = computeTaxBreakdown(rideshareTaxableIncome, otherIncomeAllocated);
+  const taxBreakdown = computeTaxBreakdown(rideshareTaxableIncome, otherIncomeAllocated, taxSettings);
   const incomeTax = taxBreakdown.incomeTax;
   const medicare = taxBreakdown.medicare;
   const totalTax = taxBreakdown.totalTax;
@@ -2029,6 +2164,8 @@ function computeForRange(from, to) {
     expenseOnlyGstCredit,
     expenseGstCredit,
     gstPayable,
+    gstPayments,
+    gstOutstanding,
     totalKm,
     businessKm,
     tripCount,
@@ -2185,6 +2322,29 @@ function setEditUI(submitId, cancelId, isEditing, submitLabel) {
   if (c) c.classList.toggle("hidden", !isEditing);
 }
 
+function applyTaxLockState() {
+  const form = el("taxForm");
+  if (!form) return;
+  const locked = !!form.is_locked?.checked;
+  Array.from(form.elements).forEach((field) => {
+    if (!field.name || field.name === "is_locked") return;
+    field.disabled = locked;
+  });
+  const badge = el("taxLockBadge");
+  if (badge) {
+    badge.textContent = locked ? `Locked${form.return_lodged_date?.value ? ` after return lodged ${form.return_lodged_date.value}` : ""}` : "Editable";
+    badge.classList.toggle("locked", locked);
+  }
+}
+
+function suggestedBasQuarter(dateStr = today) {
+  const month = parseLocalDate(dateStr).getMonth() + 1;
+  if (month >= 7 && month <= 9) return "Q1";
+  if (month >= 10 && month <= 12) return "Q2";
+  if (month >= 1 && month <= 3) return "Q3";
+  return "Q4";
+}
+
 function bindSwipeRows() {
   const rows = document.querySelectorAll(".swipe-row");
   rows.forEach((row) => {
@@ -2210,16 +2370,20 @@ function bindSwipeRows() {
 }
 function renderTaxBreakdown() {
   const m = computeMetrics(readDraftTaxValues());
-  const otherIncome = n(readDraftTaxValues().other_income);
+  const draft = readDraftTaxValues();
+  const otherIncome = n(draft.other_income);
+  const paygLabel = n(draft.payg_tax_withheld) > 0 ? "PAYG Tax Withheld Entered" : "Estimated PAYG Tax on Other Income";
   const html = `
     <div class="tax-panel">
       <strong>GST Position</strong>
-      <div class="meta">GST collected from fares versus GST credits from expenses and platform fees.</div>
+      <div class="meta">GST collected from fares and tips versus claimable expense GST credits. ATO payments are tracked separately.</div>
       ${line("G1 Total Sales incl Tips/Bonus", aud(m.gstSalesTotal))}
       ${line("GST on Sales (1A)", aud(m.fareGst))}
       ${line("Expense GST Credits (1B)", aud(m.expenseGstCredit))}
       ${line("Platform Fee GST (not deducted here)", aud(m.platformFeeGst))}
       ${line("GST Total Payable", aud(m.gstPayable))}
+      ${line("GST Payments to ATO", aud(m.gstPayments))}
+      ${line("GST Outstanding / Credit", aud(m.gstOutstanding))}
     </div>
     <div class="tax-panel">
       <strong>Rideshare Tax Payable</strong>
@@ -2237,11 +2401,14 @@ function renderTaxBreakdown() {
       ${line("Rideshare After Tax Income", aud(m.afterTaxIncome))}
     </div>
     <div class="tax-panel">
-      <strong>Other Income Tax Position</strong>
-      <div class="meta">This is treated as PAYG income already taxed through salary withholding.</div>
+      <strong>Financial Year Tax Settings</strong>
+      <div class="meta">These inputs are saved separately for the selected financial year and can be locked after lodgement.</div>
+      ${line("Tax Profile", esc(draft.tax_profile || "resident"))}
       ${line("Other Income Entered", aud(otherIncome))}
-      ${line("Estimated PAYG Tax on Other Income", aud(m.otherIncomeTaxPaid))}
+      ${line(paygLabel, aud(m.otherIncomeTaxPaid))}
+      ${line("Medicare Levy Rate", pct(draft.medicare_levy_rate))}
       ${line("Current Tax Slab", esc(m.slabLabel))}
+      ${line("FY Lock Status", draft.is_locked ? "Locked" : "Editable")}
     </div>
   `;
   if (el("taxBreakdown")) el("taxBreakdown").innerHTML = html;
@@ -2252,32 +2419,37 @@ function readDraftTaxValues() {
   if (!form) return {};
   return {
     other_income: n(form.other_income?.value),
+    payg_tax_withheld: n(form.payg_tax_withheld?.value),
     super_contribution: n(form.super_contribution?.value),
     deduction_method: validDeductionMethod(form.deduction_method?.value),
     cents_per_km_rate: n(form.cents_per_km_rate?.value || DEFAULT_TAX_SETTINGS.cents_per_km_rate),
-    cents_per_km_cap: n(form.cents_per_km_cap?.value || DEFAULT_TAX_SETTINGS.cents_per_km_cap)
+    cents_per_km_cap: n(form.cents_per_km_cap?.value || DEFAULT_TAX_SETTINGS.cents_per_km_cap),
+    tax_profile: form.tax_profile?.value || DEFAULT_TAX_SETTINGS.tax_profile,
+    medicare_levy_rate: n(form.medicare_levy_rate?.value ?? DEFAULT_TAX_SETTINGS.medicare_levy_rate),
+    tax_slabs_json: form.tax_slabs_json?.value || DEFAULT_TAX_SETTINGS.tax_slabs_json,
+    is_locked: !!form.is_locked?.checked,
+    return_lodged_date: form.return_lodged_date?.value || "",
+    tax_notes: form.tax_notes?.value || ""
   };
 }
 
-function taxSlabForIncome(income) {
-  const brackets = [
-    { upto: 18200, rate: 0, label: "0% up to $18,200" },
-    { upto: 45000, rate: 0.16, label: "16% from $18,201 to $45,000" },
-    { upto: 135000, rate: 0.30, label: "30% from $45,001 to $135,000" },
-    { upto: 190000, rate: 0.37, label: "37% from $135,001 to $190,000" },
-    { upto: Infinity, rate: 0.45, label: "45% above $190,000" }
-  ];
-  return brackets.find((x) => income <= x.upto) || brackets[brackets.length - 1];
+function taxSlabForIncome(income, slabs = taxSlabsFromSettings(db.tax)) {
+  return slabs.find((x) => income <= x.upto) || slabs[slabs.length - 1];
 }
 
-function computeTaxBreakdown(rideshareTaxableIncome, otherIncome) {
+function computeTaxBreakdown(rideshareTaxableIncome, otherIncome, taxSettings = db.tax) {
+  const settings = normalizeTaxSettings(taxSettings || {});
+  const slabs = taxSlabsFromSettings(settings);
+  const medicareRate = Math.max(0, n(settings.medicare_levy_rate));
   const taxableIncome = Math.max(0, rideshareTaxableIncome + otherIncome);
-  const incomeTax = estimateTaxAu(taxableIncome);
-  const medicare = taxableIncome * 0.02;
+  const incomeTax = estimateTaxAu(taxableIncome, slabs);
+  const medicare = taxableIncome * medicareRate;
   const totalTax = incomeTax + medicare;
-  const otherIncomeTaxPaid = estimateTaxAu(otherIncome) + otherIncome * 0.02;
+  const estimatedOtherIncomeTax = estimateTaxAu(otherIncome, slabs) + otherIncome * medicareRate;
+  const paygTaxWithheld = n(settings.payg_tax_withheld);
+  const otherIncomeTaxPaid = paygTaxWithheld > 0 ? paygTaxWithheld : estimatedOtherIncomeTax;
   const uberTaxPayable = Math.max(0, totalTax - otherIncomeTaxPaid);
-  return { incomeTax, medicare, totalTax, otherIncomeTaxPaid, uberTaxPayable };
+  return { incomeTax, medicare, totalTax, otherIncomeTaxPaid, estimatedOtherIncomeTax, paygTaxWithheld, uberTaxPayable };
 }
 
 function allocateAnnualValueToRange(total, from, to) {
@@ -2345,7 +2517,7 @@ async function clearAllAccountData() {
   }
   if (!window.confirm("Final confirmation: delete all data for this account?")) return;
   setStatus("clearAllStatus", "Clearing account data...");
-  const tables = ["trips", "fares", "expenses", "tolls", "receipts", "tax_settings"];
+  const tables = ["trips", "fares", "expenses", "tolls", "receipts", "gst_payments", "tax_settings"];
   for (const table of tables) {
     const { error } = await supabase.from(table).delete().eq("user_id", currentUser.id);
     if (error) return setStatus("clearAllStatus", `Delete failed in ${table}: ${error.message}`, true);
@@ -2366,14 +2538,46 @@ function parseBoolish(value) {
   if (["false", "no", "n", "0", "other", "other business expense", "non-vehicle"].includes(text)) return false;
   return n(value) > 0;
 }
-function estimateTaxAu(income) {
+function estimateTaxAu(income, slabs = taxSlabsFromSettings(db.tax)) {
   let tax = 0, prev = 0;
-  const brackets = [[18200, 0], [45000, 0.16], [135000, 0.30], [190000, 0.37], [Infinity, 0.45]];
-  for (const [cap, rate] of brackets) {
+  for (const slab of slabs) {
+    const cap = slab.upto;
+    const rate = n(slab.rate);
     if (income > cap) { tax += (cap - prev) * rate; prev = cap; }
     else { tax += (income - prev) * rate; break; }
   }
   return Math.max(0, tax);
+}
+
+function taxSlabsFromSettings(settings = db.tax) {
+  const parsed = parseTaxSlabsInput(settings?.tax_slabs_json);
+  return parsed.ok ? parsed.slabs : DEFAULT_TAX_SLABS.map(normalizeTaxSlab);
+}
+
+function parseTaxSlabsInput(value) {
+  try {
+    const raw = Array.isArray(value) ? value : JSON.parse(value || DEFAULT_TAX_SETTINGS.tax_slabs_json);
+    if (!Array.isArray(raw) || !raw.length) return { ok: false, message: "Tax slabs must be a JSON array." };
+    const slabs = raw.map(normalizeTaxSlab).sort((a, b) => a.upto - b.upto);
+    if (slabs[slabs.length - 1].upto !== Infinity) slabs.push(normalizeTaxSlab({ upto: null, rate: slabs[slabs.length - 1].rate, label: `${slabs[slabs.length - 1].rate * 100}% above final threshold` }));
+    return { ok: true, slabs, json: JSON.stringify(slabs.map((x) => ({ upto: x.upto === Infinity ? null : x.upto, rate: x.rate, label: x.label })), null, 2) };
+  } catch {
+    return { ok: false, message: "Tax slabs JSON is invalid. Use fields like [{\"upto\":45000,\"rate\":0.16,\"label\":\"16%...\"}]." };
+  }
+}
+
+function normalizeTaxSlab(row) {
+  const upto = row?.upto === null || row?.upto === "Infinity" || row?.upto === Infinity ? Infinity : n(row?.upto);
+  return {
+    upto,
+    rate: n(row?.rate),
+    label: row?.label || `${(n(row?.rate) * 100).toFixed(1)}% up to ${upto === Infinity ? "Infinity" : aud(upto)}`
+  };
+}
+
+function stringifyTaxSlabs(value) {
+  const parsed = parseTaxSlabsInput(value);
+  return parsed.ok ? parsed.json : DEFAULT_TAX_SETTINGS.tax_slabs_json;
 }
 function distinctMonths(dates) { return new Set(dates.filter(Boolean).map((d) => d.slice(0, 7))); }
 function setStatus(id, msg, isErr = false) { const e = el(id); e.textContent = msg; e.style.color = isErr ? "#b91c1c" : "#0f5132"; }
